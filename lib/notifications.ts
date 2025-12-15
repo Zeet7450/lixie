@@ -123,6 +123,7 @@ export async function sendHotNewsNotification(
       region: article.region,
       source: article.source_id,
     },
+    // actions is supported in Service Worker notifications but not in standard NotificationOptions type
     actions: [
       {
         action: 'open',
@@ -133,7 +134,7 @@ export async function sendHotNewsNotification(
         title: 'Tutup',
       },
     ],
-  });
+  } as NotificationOptions & { actions?: Array<{ action: string; title: string }> });
 }
 
 /**

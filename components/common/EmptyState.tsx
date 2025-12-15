@@ -23,7 +23,7 @@ export function EmptyState({ message, statusMessage }: EmptyStateProps) {
     transition: {
       duration: 2,
       repeat: Infinity,
-      ease: 'easeInOut',
+      ease: [0.4, 0, 0.2, 1] as const,
     },
   };
 
@@ -95,7 +95,7 @@ export function EmptyState({ message, statusMessage }: EmptyStateProps) {
               duration: 1.5,
               repeat: Infinity,
               delay: i * 0.2,
-              ease: 'easeInOut',
+              ease: [0.4, 0, 0.2, 1] as const,
             }}
             className="w-3 h-3 rounded-full"
             style={{
