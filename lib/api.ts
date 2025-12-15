@@ -3,7 +3,10 @@ import type { Article } from '@/types';
 import { translateArticleForRegion } from './article-translator';
 
 // API Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
+// Use environment variable if set, otherwise use relative URL for production
+// In production (Vercel), relative URLs work automatically
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
+  (typeof window !== 'undefined' ? '/api' : 'http://localhost:3000/api');
 
 export type NewsRegion = 'id' | 'cn' | 'jp' | 'kr' | 'intl';
 
@@ -89,8 +92,8 @@ export async function fetchArticles(
       timeout: 10000,
     });
 
-    if (response.data.success && (response.data.data || response.data.articles)) {
-      const articles = response.data.data || response.data.articles || [];
+    if (response.data.success && response.data.data) {
+      const articles = response.data.data || [];
       
       // Filter articles to only include from December 14, 2025 onwards
       const minDate = new Date('2025-12-14T00:00:00.000Z').getTime();
