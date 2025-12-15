@@ -26,10 +26,10 @@ export function NotificationPrompt() {
         return;
       }
 
-      // Show prompt after a delay
+      // Show prompt immediately on first visit
       const timer = setTimeout(() => {
         setShowPrompt(true);
-      }, 3000); // Show after 3 seconds
+      }, 1000); // Show after 1 second (faster for better UX)
 
       return () => clearTimeout(timer);
     }

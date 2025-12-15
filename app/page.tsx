@@ -16,6 +16,7 @@ import { useArticlesStore } from '@/store/articles';
 import { initializeNotifications } from '@/lib/notifications';
 import { useHotNewsNotifications } from '@/hooks/useHotNewsNotifications';
 import { verifyEnvironmentVariables } from '@/lib/verify-env';
+import { NotificationPrompt } from '@/components/common/NotificationPrompt';
 
 export default function Home() {
   const pageTransition = usePageTransition();
@@ -101,6 +102,7 @@ export default function Home() {
           />
           <NewsFeed category={activeCategory} />
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+          <NotificationPrompt />
         </motion.div>
       </motion.div>
     </div>
