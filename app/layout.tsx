@@ -6,6 +6,16 @@ export const metadata: Metadata = {
   title: 'Lixie - Global News Aggregator',
   description: 'Read news from around the world in one place',
   manifest: '/manifest.json',
+  icons: {
+    icon: [
+      { url: '/icon-192x192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512x512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [
+      { url: '/icon-192x192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512x512.png', sizes: '512x512', type: 'image/png' },
+    ],
+  },
 };
 
 export const viewport: Viewport = {
@@ -23,6 +33,12 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="w-full overflow-x-hidden">
       <head>
+        {/* PWA Icons for iOS and Android */}
+        <link rel="icon" href="/icon-192x192.png" sizes="192x192" type="image/png" />
+        <link rel="icon" href="/icon-512x512.png" sizes="512x512" type="image/png" />
+        <link rel="apple-touch-icon" href="/icon-192x192.png" />
+        <link rel="apple-touch-icon" sizes="192x192" href="/icon-192x192.png" />
+        <link rel="apple-touch-icon" sizes="512x512" href="/icon-512x512.png" />
         {/* Prevent flash of light theme - set theme IMMEDIATELY before any render */}
         <script
           dangerouslySetInnerHTML={{
