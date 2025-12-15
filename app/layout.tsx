@@ -23,6 +23,8 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 5,
+  userScalable: true,
+  viewportFit: 'cover', // For iOS fullscreen
 };
 
 export default function RootLayout({
@@ -41,6 +43,14 @@ export default function RootLayout({
         <link rel="apple-touch-icon" sizes="512x512" href="/icon-512x512.png" />
         {/* PWA Manifest Link */}
         <link rel="manifest" href="/manifest.json" />
+        {/* Mobile Fullscreen Meta Tags */}
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        {/* Firefox Mobile PWA Support */}
+        <meta name="theme-color" content="#FFFDD0" />
+        <meta name="msapplication-TileColor" content="#FFFDD0" />
+        <meta name="msapplication-navbutton-color" content="#FFFDD0" />
         {/* Prevent flash of light theme - set theme IMMEDIATELY before any render */}
         <script
           dangerouslySetInnerHTML={{
