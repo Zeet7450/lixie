@@ -1,0 +1,47 @@
+{
+  "app": {
+    "title": "Lixie - Agregator Berita Global",
+    "description": "Baca berita dari seluruh dunia dalam satu tempat"
+  },
+  "nav": {
+    "all": "Semua",
+    "hot": "Hot",
+    "technology": "Teknologi",
+    "politics": "Politik",
+    "economy": "Ekonomi",
+    "business": "Bisnis",
+    "entertainment": "Entertainment",
+    "sports": "Olahraga",
+    "health": "Kesehatan",
+    "science": "Sains",
+    "education": "Pendidikan",
+    "environment": "Lingkungan",
+    "travel": "Travel",
+    "food": "Makanan",
+    "fashion": "Fashion",
+    "automotive": "Otomotif",
+    "real-estate": "Properti",
+    "history": "Sejarah"
+  },
+  "time": {
+    "now": "Baru saja",
+    "min_ago": "{count} menit yang lalu",
+    "hour_ago": "{count} jam yang lalu",
+    "day_ago": "{count} hari yang lalu"
+  },
+  "article": {
+    "read_more": "Baca Selengkapnya",
+    "bookmark": "Simpan",
+    "unbookmark": "Hapus Simpanan",
+    "share": "Bagikan",
+    "mark_read": "Tandai Sudah Dibaca"
+  },
+  "common": {
+    "search": "Cari berita...",
+    "loading": "Memuat...",
+    "error": "Terjadi kesalahan",
+    "no_articles": "Tidak ada berita",
+    "bookmarks": "Bookmark"
+  }
+}
+

@@ -1,0 +1,47 @@
+{
+  "app": {
+    "title": "Lixie - Global News Aggregator",
+    "description": "Read news from around the world in one place"
+  },
+  "nav": {
+    "all": "All",
+    "hot": "Hot",
+    "technology": "Technology",
+    "politics": "Politics",
+    "economy": "Economy",
+    "business": "Business",
+    "entertainment": "Entertainment",
+    "sports": "Sports",
+    "health": "Health",
+    "science": "Science",
+    "education": "Education",
+    "environment": "Environment",
+    "travel": "Travel",
+    "food": "Food",
+    "fashion": "Fashion",
+    "automotive": "Automotive",
+    "real-estate": "Real Estate",
+    "history": "History"
+  },
+  "time": {
+    "now": "Just now",
+    "min_ago": "{count} minutes ago",
+    "hour_ago": "{count} hours ago",
+    "day_ago": "{count} days ago"
+  },
+  "article": {
+    "read_more": "Read More",
+    "bookmark": "Save",
+    "unbookmark": "Unsave",
+    "share": "Share",
+    "mark_read": "Mark as Read"
+  },
+  "common": {
+    "search": "Search news...",
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "no_articles": "No news available",
+    "bookmarks": "Bookmarks"
+  }
+}
+
