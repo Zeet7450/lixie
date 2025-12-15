@@ -39,6 +39,8 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icon-192x192.png" />
         <link rel="apple-touch-icon" sizes="192x192" href="/icon-192x192.png" />
         <link rel="apple-touch-icon" sizes="512x512" href="/icon-512x512.png" />
+        {/* PWA Manifest Link */}
+        <link rel="manifest" href="/manifest.json" />
         {/* Prevent flash of light theme - set theme IMMEDIATELY before any render */}
         <script
           dangerouslySetInnerHTML={{
@@ -99,6 +101,19 @@ export default function RootLayout({
                   const metaTheme = document.querySelector('meta[name="theme-color"]');
                   if (metaTheme) {
                     metaTheme.setAttribute('content', isDarkMode ? '#1e293b' : '#FFFDD0');
+                  }
+                  
+                  // Register service worker for PWA (Android)
+                  if ('serviceWorker' in navigator) {
+                    window.addEventListener('load', () => {
+                      navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                        .then((registration) => {
+                          console.log('✅ Service Worker registered:', registration.scope);
+                        })
+                        .catch((error) => {
+                          console.warn('⚠️ Service Worker registration failed:', error);
+                        });
+                    });
                   }
                 } catch (e) {
                   // Silent fail - use default light theme

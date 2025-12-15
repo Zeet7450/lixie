@@ -3,6 +3,7 @@
   "short_name": "Lixie",
   "description": "Read news from around the world in one place",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#FFFDD0",
