@@ -5,24 +5,28 @@ import { motion } from 'framer-motion';
 
 interface DebugStatus {
   success: boolean;
-  environment?: {
-    hasGroqKey: boolean;
-    groqKeyLength: number;
-    hasDatabase: boolean;
-    databaseUrlPrefix: string;
+  groq?: {
+    configured: boolean;
+    keyLength: number;
   };
   database?: {
+    configured: boolean;
     connected: boolean;
-    error?: string;
-    timestamp?: string;
+    error?: string | null;
+    urlPrefix?: string;
   };
   articles?: {
     total: number;
-    byTable: Record<string, number>;
-    recent?: any[];
+    byRegion?: Record<string, number>;
   };
   scheduler?: {
-    status: string;
+    running: boolean;
+    status?: {
+      isRunning: boolean;
+      requestCounts: Record<string, number>;
+      queueLength: number;
+      availableRequests: number;
+    };
   };
   message?: string;
   error?: string;
@@ -81,28 +85,34 @@ export default function DebugPage() {
           </h1>
 
           {/* Environment Status */}
-          {status?.environment && (
+          {(status?.groq || status?.database) && (
             <div className="border-b border-gray-200 dark:border-gray-700 pb-4">
               <h2 className="text-lg font-semibold text-emerald-800 dark:text-cream-300 mb-3">
                 Environment Variables
               </h2>
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Groq API Key:</span>
-                  <span className={status.environment.hasGroqKey ? 'text-green-600' : 'text-red-600'}>
-                    {status.environment.hasGroqKey ? `✓ Configured (${status.environment.groqKeyLength} chars)` : '✗ Not configured'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Database URL:</span>
-                  <span className={status.environment.hasDatabase ? 'text-green-600' : 'text-red-600'}>
-                    {status.environment.hasDatabase ? `✓ Configured` : '✗ Not configured'}
-                  </span>
-                </div>
-                {status.environment.hasDatabase && (
-                  <div className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                    {status.environment.databaseUrlPrefix}
+                {status?.groq && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">Groq API Key:</span>
+                    <span className={status.groq.configured ? 'text-green-600' : 'text-red-600'}>
+                      {status.groq.configured ? `✓ Configured (${status.groq.keyLength} chars)` : '✗ Not configured'}
+                    </span>
                   </div>
+                )}
+                {status?.database && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Database URL:</span>
+                      <span className={status.database.configured ? 'text-green-600' : 'text-red-600'}>
+                        {status.database.configured ? `✓ Configured` : '✗ Not configured'}
+                      </span>
+                    </div>
+                    {status.database.urlPrefix && (
+                      <div className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                        {status.database.urlPrefix}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -121,11 +131,6 @@ export default function DebugPage() {
                     {status.database.connected ? '✓ Connected' : `✗ Error: ${status.database.error || 'Not connected'}`}
                   </span>
                 </div>
-                {status.database.timestamp && (
-                  <div className="text-xs text-gray-500 dark:text-gray-500">
-                    Last check: {new Date(status.database.timestamp).toLocaleString()}
-                  </div>
-                )}
               </div>
             </div>
           )}
@@ -144,54 +149,78 @@ export default function DebugPage() {
                   </span>
                 </div>
                 <div className="mt-3">
-                  <div className="text-gray-600 dark:text-gray-400 mb-2">By Table:</div>
+                  <div className="text-gray-600 dark:text-gray-400 mb-2">By Region:</div>
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    {Object.entries(status.articles.byTable).map(([table, count]) => (
-                      <div key={table} className="flex justify-between">
-                        <span className="capitalize">{table}:</span>
-                        <span className={count > 0 ? 'text-green-600' : 'text-gray-400'}>{count as number}</span>
-                      </div>
-                    ))}
+                    {status.articles.byRegion && Object.entries(status.articles.byRegion).map(([region, count]) => {
+                      const regionNames: Record<string, string> = {
+                        'id': 'Indonesia',
+                        'cn': 'China',
+                        'jp': 'Japan',
+                        'kr': 'Korea',
+                        'intl': 'International',
+                      };
+                      return (
+                        <div key={region} className="flex justify-between">
+                          <span className="capitalize">{regionNames[region] || region}:</span>
+                          <span className={count > 0 ? 'text-green-600' : 'text-gray-400'}>{count as number}</span>
+                        </div>
+                      );
+                    })}
+                    {!status.articles.byRegion && (
+                      <div className="text-gray-500 dark:text-gray-400">No article data available</div>
+                    )}
                   </div>
                 </div>
-                {status.articles.recent && status.articles.recent.length > 0 && (
-                  <div className="mt-3">
-                    <div className="text-gray-600 dark:text-gray-400 mb-2">Recent Articles:</div>
-                    {status.articles.recent.map((group: any) => (
-                      <div key={group.table} className="mb-2 text-xs">
-                        <div className="font-semibold capitalize mb-1">{group.table}:</div>
-                        {group.articles.map((article: any) => (
-                          <div key={article.id} className="ml-2 text-gray-500 dark:text-gray-400">
-                            • {article.title?.substring(0, 60)}... ({new Date(article.published_at).toLocaleDateString()})
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           )}
 
           {/* Scheduler Status */}
-          <div className="border-b border-gray-200 dark:border-gray-700 pb-4">
-            <h2 className="text-lg font-semibold text-emerald-800 dark:text-cream-300 mb-3">
-              API Scheduler
-            </h2>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-600 dark:text-gray-400">Status:</span>
-                <span className={schedulerStatus?.running ? 'text-green-600' : 'text-yellow-600'}>
-                  {schedulerStatus?.running ? '✓ Running' : '⚠ Not running'}
-                </span>
-              </div>
-              {schedulerStatus?.message && (
-                <div className="text-xs text-gray-500 dark:text-gray-500">
-                  {schedulerStatus.message}
+          {status?.scheduler && (
+            <div className="border-b border-gray-200 dark:border-gray-700 pb-4">
+              <h2 className="text-lg font-semibold text-emerald-800 dark:text-cream-300 mb-3">
+                API Scheduler
+              </h2>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-600 dark:text-gray-400">Status:</span>
+                  <span className={status.scheduler.running ? 'text-green-600' : 'text-yellow-600'}>
+                    {status.scheduler.running ? '✓ Running' : '⚠ Not running'}
+                  </span>
                 </div>
-              )}
+                {status.scheduler.status && (
+                  <div className="mt-3 space-y-1 text-xs">
+                    <div className="text-gray-600 dark:text-gray-400 mb-2">Request Counts:</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {Object.entries(status.scheduler.status.requestCounts || {}).map(([region, count]) => {
+                        const regionNames: Record<string, string> = {
+                          'id': 'Indonesia',
+                          'cn': 'China',
+                          'jp': 'Japan',
+                          'kr': 'Korea',
+                          'intl': 'International',
+                        };
+                        return (
+                          <div key={region} className="flex justify-between">
+                            <span className="capitalize">{regionNames[region] || region}:</span>
+                            <span className="text-gray-600 dark:text-gray-400">{count as number}/10</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-between mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+                      <span className="text-gray-600 dark:text-gray-400">Queue Length:</span>
+                      <span className="text-gray-600 dark:text-gray-400">{status.scheduler.status.queueLength || 0}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Available Requests:</span>
+                      <span className="text-gray-600 dark:text-gray-400">{status.scheduler.status.availableRequests || 0}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Message */}
           {status?.message && (

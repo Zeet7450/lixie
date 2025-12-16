@@ -17,14 +17,16 @@ export const useArticlesStore = create<ArticlesStore>((set, get) => ({
     // Clear existing articles first
     set({ articles: [] });
     
-    // Filter articles to only include from December 14, 2025 onwards
-    const minDate = new Date('2025-12-14T00:00:00.000Z').getTime();
+    // Filter articles to only include from December 9, 2025 onwards
+    const minDate = new Date('2025-12-09T00:00:00.000Z');
+    const minDateTime = minDate.getTime();
     const filtered = articles.filter((article) => {
       try {
+        if (!article.published_at) return true; // Accept articles without date
         const publishedTime = new Date(article.published_at).getTime();
-        return publishedTime >= minDate;
+        return publishedTime >= minDateTime;
       } catch {
-        return false;
+        return true; // Accept articles with invalid date format
       }
     });
     set({ articles: filtered });

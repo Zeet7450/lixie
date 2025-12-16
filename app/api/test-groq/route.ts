@@ -31,7 +31,7 @@ export async function GET() {
           content: 'Say "API key is working" if you can read this.',
         },
       ],
-      model: 'llama-3.1-70b-versatile',
+      model: 'llama-3.3-70b-versatile', // Updated to active model
       max_tokens: 10,
     });
 
@@ -44,7 +44,7 @@ export async function GET() {
         keyLength: apiKey.length,
         keyPrefix: apiKey.substring(0, 10) + '...',
         testResponse: responseText,
-        model: 'llama-3.1-70b-versatile',
+        model: 'llama-3.3-70b-versatile',
       },
     });
   } catch (error: any) {

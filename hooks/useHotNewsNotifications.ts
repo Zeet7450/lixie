@@ -23,9 +23,15 @@ export function useHotNewsNotifications() {
     }
 
     // Filter for hot/breaking news only
-    const hotArticles = articles.filter(
-      (article) => article.is_breaking || (article.is_trending && article.hotness_score >= 80)
-    );
+    // HOT criteria: hotness_score >= 80 (8 on 0-10 scale) AND (is_breaking OR is_trending)
+    // OR is_breaking published within last 2 hours
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    const hotArticles = articles.filter((article) => {
+      const isHot = article.hotness_score >= 80 && (article.is_breaking || article.is_trending);
+      const isRecentBreaking = article.is_breaking && article.published_at && 
+        new Date(article.published_at).getTime() >= twoHoursAgo;
+      return isHot || isRecentBreaking;
+    });
 
     // Send notification for new hot articles
     hotArticles.forEach((article) => {

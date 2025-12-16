@@ -95,14 +95,16 @@ export async function fetchArticles(
     if (response.data.success && response.data.data) {
       const articles = response.data.data || [];
       
-      // Filter articles to only include from December 14, 2025 onwards
-      const minDate = new Date('2025-12-14T00:00:00.000Z').getTime();
+      // Filter articles to only include from December 9, 2025 onwards
+      const minDate = new Date('2025-12-09T00:00:00.000Z');
+      const minDateTime = minDate.getTime();
       const filteredArticles = articles.filter((article: Article) => {
         try {
+          if (!article.published_at) return true; // Accept articles without date
           const publishedTime = new Date(article.published_at).getTime();
-          return publishedTime >= minDate;
+          return publishedTime >= minDateTime;
         } catch {
-          return false;
+          return true; // Accept articles with invalid date format
         }
       });
 
@@ -643,7 +645,15 @@ function getMockArticles(category?: string, region?: NewsRegion): Article[] {
   // Filter by category if specified
   if (category && category !== 'all') {
     if (category === 'hot') {
-      return filteredArticles.filter(article => article.is_breaking);
+      // HOT filter: hotness_score >= 80 (8 on 0-10 scale) AND (is_breaking OR is_trending)
+      // Published within last 2 hours for freshness
+      const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+      return filteredArticles.filter(article => {
+        const isHot = (article.hotness_score >= 80 && (article.is_breaking || article.is_trending));
+        const isRecentBreaking = article.is_breaking && article.published_at && 
+          new Date(article.published_at).getTime() >= twoHoursAgo;
+        return isHot || isRecentBreaking;
+      });
     }
     return filteredArticles.filter(article => article.category === category);
   }
@@ -660,12 +670,17 @@ function getMockArticles(category?: string, region?: NewsRegion): Article[] {
  * Filters out articles older than yesterday
  */
 export function sortArticles(articles: Article[]): Article[] {
-  // Filter: Only include articles from December 14, 2025 onwards
-  const minDate = new Date('2025-12-14T00:00:00.000Z');
+  // Filter: Only include articles from last 7 days onwards (fresh news)
+  const minDate = new Date();
+  minDate.setDate(minDate.getDate() - 7);
   const minDateTime = minDate.getTime();
 
   const recentArticles = articles.filter((article) => {
     try {
+      if (!article.published_at) {
+        // Accept articles without date (they might be very recent)
+        return true;
+      }
       const publishedTime = new Date(article.published_at).getTime();
       const isValid = publishedTime >= minDateTime;
       if (!isValid && article.published_at) {
@@ -673,9 +688,9 @@ export function sortArticles(articles: Article[]): Article[] {
       }
       return isValid;
     } catch (error) {
-      // If date parsing fails, exclude it (invalid date)
-      console.log(`Sort: Filtered out article with invalid date: ${article.title}`, error);
-      return false;
+      // Accept articles with invalid date format (they might be very recent)
+      console.log(`Sort: Accepting article with invalid date format: ${article.title}`, error);
+      return true;
     }
   });
 

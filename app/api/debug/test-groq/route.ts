@@ -22,7 +22,7 @@ export async function GET() {
           content: 'Say "Groq API is working" in one sentence.',
         },
       ],
-      model: 'llama-3.1-70b-versatile',
+      model: 'llama-3.3-70b-versatile', // Updated to active model
       max_tokens: 50,
     });
     
@@ -32,7 +32,7 @@ export async function GET() {
       success: true,
       message: 'Groq API test successful',
       response,
-      model: 'llama-3.1-70b-versatile',
+      model: 'llama-3.3-70b-versatile',
     });
   } catch (error: any) {
     console.error('Groq API test error:', error);

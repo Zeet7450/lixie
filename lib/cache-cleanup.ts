@@ -1,12 +1,14 @@
 /**
  * Clean up old cached articles from localStorage
- * Removes articles older than December 14, 2025
+ * Removes articles older than 7 days
  */
 export function cleanupOldCachedArticles(): number {
   if (typeof window === 'undefined') return 0;
 
   let cleanedCount = 0;
-  const minDate = new Date('2025-12-14T00:00:00.000Z').getTime();
+  const minDate = new Date();
+  minDate.setDate(minDate.getDate() - 7);
+  const minDateTime = minDate.getTime();
 
   try {
     // Get all localStorage keys that start with 'lixie-articles-'
@@ -29,7 +31,7 @@ export function cleanupOldCachedArticles(): number {
             const filteredArticles = cacheData.articles.filter((article: any) => {
               try {
                 const publishedTime = new Date(article.published_at).getTime();
-                return publishedTime >= minDate;
+                return publishedTime >= minDateTime;
               } catch {
                 return false;
               }

@@ -3,22 +3,24 @@ import { apiScheduler } from '@/lib/api-scheduler';
 
 export async function POST() {
   try {
-    // Check if already running
+    // If already running, stop first to restart with new settings
     if (apiScheduler.isRunning) {
-      return NextResponse.json({
-        success: true,
-        message: 'API Scheduler is already running',
-        running: true,
-      });
+      console.log('Scheduler is running, stopping first to restart with new settings...');
+      apiScheduler.stop();
+      // Wait a bit for cleanup
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     // Start the scheduler (server-side only, has access to env vars)
     await apiScheduler.start();
     
+    // Ensure isRunning is set correctly after start
+    const isRunning = apiScheduler.isRunning;
+    
     return NextResponse.json({
       success: true,
-      message: 'API Scheduler started successfully',
-      running: apiScheduler.isRunning,
+      message: isRunning ? 'API Scheduler started successfully with new date filter (last 7 days)' : 'API Scheduler start attempted but may have failed',
+      running: isRunning,
     });
   } catch (error: any) {
     console.error('Error starting API scheduler:', error);

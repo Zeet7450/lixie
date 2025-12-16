@@ -5,6 +5,11 @@ import type { NewsRegion } from '@/lib/api';
 
 export async function GET() {
   try {
+    // #region agent log
+    if (typeof window === 'undefined') {
+      fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/debug/status/route.ts:7',message:'GET /api/debug/status called',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'K'})}).catch(()=>{});
+    }
+    // #endregion
     const groqKey = process.env.NEXT_PUBLIC_GROQ_API_KEY || process.env.GROQ_API_KEY || '';
     const hasGroqKey = !!groqKey && groqKey.length > 0;
     
@@ -21,14 +26,37 @@ export async function GET() {
       try {
         const pool = getPool();
         if (pool) {
-          // Test connection with timeout
-          const testQuery = pool.query('SELECT NOW()');
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Connection timeout')), 10000)
-          );
+          // Test connection with timeout and retry
+          let connectionTested = false;
+          for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+              const testQuery = pool.query('SELECT NOW()');
+              const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Connection timeout')), 20000)
+              );
+              
+              await Promise.race([testQuery, timeoutPromise]);
+              dbConnected = true;
+              connectionTested = true;
+              break;
+            } catch (testError: any) {
+              if (attempt === 4) {
+                // Last attempt failed - check if it's AggregateError
+                if (testError.message?.includes('AggregateError') || testError.name === 'AggregateError') {
+                  dbError = `Connection timeout: ${testError.message || 'AggregateError'}`;
+                } else {
+                  throw testError;
+                }
+              } else {
+                // Wait before retry (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+              }
+            }
+          }
           
-          await Promise.race([testQuery, timeoutPromise]);
-          dbConnected = true;
+          if (!connectionTested) {
+            throw new Error('Connection test failed after retries');
+          }
           
           // Count articles in each table
           const tables: NewsRegion[] = ['id', 'cn', 'jp', 'kr', 'intl'];
@@ -54,8 +82,13 @@ export async function GET() {
               );
               
               if (tableExists.rows[0]?.exists) {
+                // Count articles from last 7 days
+                const minDate = new Date();
+                minDate.setDate(minDate.getDate() - 7);
+                const minDateISO = minDate.toISOString();
                 const result = await pool.query(
-                  `SELECT COUNT(*) as count FROM ${tableName} WHERE published_at >= '2025-12-14T00:00:00.000Z'`
+                  `SELECT COUNT(*) as count FROM ${tableName} WHERE published_at >= $1`,
+                  [minDateISO]
                 );
                 const count = parseInt(result.rows[0]?.count || '0', 10);
                 articleCounts[region] = count;
@@ -73,16 +106,23 @@ export async function GET() {
           dbError = 'Database pool not initialized';
         }
       } catch (error: any) {
-        dbError = error.message || 'Database connection failed';
+        const errorMsg = error.message || error.toString() || 'Database connection failed';
         console.error('Database connection error:', error);
+        // Reset pool to allow reconnection on next request
+        if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || errorMsg.includes('timeout')) {
+          dbError = `Connection timeout: ${errorMsg}`;
+        } else {
+          dbError = errorMsg;
+        }
       }
     } else {
       dbError = 'DATABASE_URL not configured';
     }
     
     // Check API scheduler status (from singleton)
-    const schedulerRunning = apiScheduler.isRunning;
+    // Force refresh status by calling getStatus() which reads current state
     const schedulerStatus = apiScheduler.getStatus();
+    const schedulerRunning = schedulerStatus.isRunning;
     
     // Generate message
     let message = '';

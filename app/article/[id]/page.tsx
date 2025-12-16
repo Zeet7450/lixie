@@ -61,10 +61,36 @@ export default function ArticleDetail() {
     }
   }, [article, addReading]);
 
-  const handleReadFullArticle = () => {
-    if (article?.source_url) {
-      window.open(article.source_url, '_blank', 'noopener,noreferrer');
+  const handleReadFullArticle = async () => {
+    if (!article?.source_url) {
+      alert(language === 'id' 
+        ? 'URL artikel tidak tersedia' 
+        : 'Article URL not available');
+      return;
     }
+
+    // Validate URL before opening
+    try {
+      const response = await fetch('/api/test-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: article.source_url }),
+      });
+      
+      const result = await response.json();
+      
+      if (!result.accessible) {
+        alert(language === 'id'
+          ? `URL artikel tidak dapat diakses:\n${article.source_url}\n\nArtikel mungkin telah dihapus atau URL tidak valid.`
+          : `Article URL is not accessible:\n${article.source_url}\n\nThe article may have been removed or the URL is invalid.`);
+        return;
+      }
+    } catch (error) {
+      console.warn('Failed to validate URL, opening anyway:', error);
+    }
+
+    // Open URL in new tab
+    window.open(article.source_url, '_blank', 'noopener,noreferrer');
   };
 
   if (loadingDetail && !articleFromStore) {
@@ -206,7 +232,7 @@ export default function ArticleDetail() {
       </motion.p>
 
       {/* Article Summary from Source */}
-      {article.summary && (
+      {(article.summary || article.content) && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -218,9 +244,16 @@ export default function ArticleDetail() {
               {language === 'id' ? 'Ringkasan Artikel' : 'Article Summary'}
             </h2>
             <div className="prose prose-emerald dark:prose-invert max-w-none">
-              <p className="text-base leading-relaxed text-emerald-800 dark:text-cream-300 whitespace-pre-line">
-                {article.summary}
-              </p>
+              {article.summary ? (
+                <p className="text-base leading-relaxed text-emerald-800 dark:text-cream-300 whitespace-pre-line">
+                  {article.summary}
+                </p>
+              ) : article.content ? (
+                <div 
+                  className="text-base leading-relaxed text-emerald-800 dark:text-cream-300"
+                  dangerouslySetInnerHTML={{ __html: article.content }}
+                />
+              ) : null}
             </div>
           </div>
         </motion.div>

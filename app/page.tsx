@@ -56,11 +56,24 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true);
-    // Show splash screen for 10 seconds to allow full animation to play
-    const timer = setTimeout(() => {
+    
+    // Check if splash screen has been shown before (using localStorage)
+    const hasSeenSplash = typeof window !== 'undefined' && localStorage.getItem('lixie-splash-shown') === 'true';
+    
+    if (hasSeenSplash) {
+      // Don't show splash if user has seen it before
       setShowSplash(false);
-    }, 10000);
-    return () => clearTimeout(timer);
+    } else {
+      // Show splash screen for 10 seconds only on first visit
+      const timer = setTimeout(() => {
+        setShowSplash(false);
+        // Mark splash as shown
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('lixie-splash-shown', 'true');
+        }
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
   }, []);
 
   if (!mounted) {

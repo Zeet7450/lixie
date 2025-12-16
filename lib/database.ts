@@ -23,44 +23,72 @@ export function getPool(): Pool | null {
         ssl: {
           rejectUnauthorized: false, // Required for Neon
         },
-        max: 10, // Reduce max connections to avoid timeout
-        min: 2, // Keep minimum connections alive
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 15000, // Increase to 15 seconds for Neon
+        max: 5, // Reduce max connections to avoid timeout
+        min: 0, // Don't keep connections alive (let them close when idle)
+        idleTimeoutMillis: 10000, // Close idle connections faster
+        connectionTimeoutMillis: 20000, // Increase to 20 seconds for Neon
         statement_timeout: 30000, // 30 seconds for queries
         query_timeout: 30000,
-        keepAlive: true,
-        keepAliveInitialDelayMillis: 0, // Start keepalive immediately
+        keepAlive: false, // Disable keepalive to avoid connection issues
       });
+      
+      // #region agent log
+      if (typeof window === 'undefined') {
+        fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:34',message:'Database pool created',data:{max:5,connectionTimeout:20000},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+      }
+      // #endregion
 
       // Handle pool errors
-      pool.on('error', (err) => {
+      pool.on('error', (err: any) => {
         console.error('Unexpected database pool error:', err);
+        // #region agent log
+        if (typeof window === 'undefined') {
+          fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:38',message:'Pool error event',data:{error:err?.message,code:err?.code},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+        }
+        // #endregion
         // Reset pool on error to allow reconnection
         pool = null;
       });
 
-      // Test connection with retry
-      let retries = 3;
-      const testConnection = async (): Promise<void> => {
-        try {
-          await pool!.query('SELECT NOW()');
-          console.log('✓ Neon database connected successfully');
-        } catch (err: any) {
-          retries--;
-          if (retries > 0) {
-            console.warn(`Database connection test failed, retrying... (${retries} attempts left)`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            return testConnection();
-          } else {
-            console.error('Database connection error after retries:', err);
-            // Don't reset pool here, let it retry on next query
+      // Test connection asynchronously (don't block)
+      const testConnection = async () => {
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            const client = await pool!.connect();
+            await client.query('SELECT 1');
+            client.release();
+            console.log('✓ Database connection successful');
+            // #region agent log
+            if (typeof window === 'undefined') {
+              fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:54',message:'Database connection test successful',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+            }
+            // #endregion
+            break;
+          } catch (err: any) {
+            retries--;
+            // #region agent log
+            if (typeof window === 'undefined') {
+              fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:61',message:'Database connection test failed',data:{retries,error:err?.message,code:err?.code},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+            }
+            // #endregion
+            if (retries > 0) {
+              console.warn(`Database connection test failed, retrying... (${retries} attempts left)`, err?.message || err);
+              await new Promise(resolve => setTimeout(resolve, 3000)); // Increase delay
+            } else {
+              console.error('Database connection error after retries:', err?.message || err);
+              // Reset pool to allow reconnection on next attempt
+              pool = null;
+            }
           }
         }
       };
       
-      // Test connection asynchronously (don't block)
-      testConnection().catch(console.error);
+
+      testConnection().catch((err) => {
+        console.error('Async database connection test failed:', err?.message || err);
+        pool = null; // Reset pool on failure
+      });
     } catch (error) {
       console.error('Error creating database pool:', error);
       return null;
@@ -93,17 +121,28 @@ export async function fetchArticlesFromDatabase(
   region: NewsRegion,
   category?: string
 ): Promise<Article[]> {
-  const dbPool = getPool();
-  if (!dbPool) {
-    console.warn('Database pool not available for fetchArticlesFromDatabase');
-    return [];
+  // #region agent log
+  if (typeof window === 'undefined') {
+    fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:129',message:'fetchArticlesFromDatabase called',data:{region,category},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
   }
-
+  // #endregion
+  
   try {
+    const dbPool = getPool();
+    if (!dbPool) {
+      console.warn('Database pool not available for fetchArticlesFromDatabase');
+      // #region agent log
+      if (typeof window === 'undefined') {
+        fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:138',message:'Database pool not available',data:{region,category},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+      }
+      // #endregion
+      return [];
+    }
+    
     const tableName = getTableName(region);
     
-    // Only fetch articles from December 14, 2025 onwards
-    const minDate = new Date('2025-12-14T00:00:00.000Z');
+    // Only fetch articles from December 9, 2025 onwards
+    const minDate = new Date('2025-12-09T00:00:00.000Z');
     const minDateISO = minDate.toISOString();
 
     let query = `
@@ -117,12 +156,29 @@ export async function fetchArticlesFromDatabase(
       query += ` AND category = $${params.length + 1}`;
       params.push(category);
     } else if (category === 'hot') {
-      query += ` AND is_breaking = true`;
+      // HOT filter: hotness_score >= 80 (equivalent to 8 on 0-10 scale) AND is_breaking OR is_trending
+      // Published within last 2 hours for freshness
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      query += ` AND (
+        (hotness_score >= 80 AND (is_breaking = true OR is_trending = true))
+        OR (is_breaking = true AND published_at >= $${params.length + 1})
+      )`;
+      params.push(twoHoursAgo);
     }
 
     query += ` ORDER BY published_at DESC, hotness_score DESC LIMIT 200`;
 
+    // #region agent log
+    if (typeof window === 'undefined') {
+      fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:134',message:'Before fetch query',data:{tableName,region,category,minDateISO},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+    }
+    // #endregion
     const result = await dbPool.query(query, params);
+    // #region agent log
+    if (typeof window === 'undefined') {
+      fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:137',message:'After fetch query',data:{tableName,region,category,rowsReturned:result.rows?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+    }
+    // #endregion
 
     // Transform database rows to Article format
     const articles: Article[] = (result.rows || []).map((row: any) => ({
@@ -151,12 +207,24 @@ export async function fetchArticlesFromDatabase(
 
     return articles;
   } catch (error: any) {
+    // This catch block handles errors from the try block above (dbPool.query and transformation)
     console.error('Error fetching articles from database:', error);
+    // #region agent log
+    if (typeof window === 'undefined') {
+      fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:175',message:'Error fetching articles',data:{region,category,errorCode:error?.code,errorMessage:error?.message,errorStack:error?.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'K'})}).catch(()=>{});
+    }
+    // #endregion
     // If connection error, reset pool to allow reconnection
-    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || error.message?.includes('timeout')) {
+    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || error.message?.includes('timeout') || error.message?.includes('AggregateError')) {
       console.warn('Database connection timeout, pool will be reset on next request');
       pool = null;
+      // #region agent log
+      if (typeof window === 'undefined') {
+        fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:180',message:'Pool reset due to timeout',data:{region},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+      }
+      // #endregion
     }
+    // Don't throw error, return empty array instead to prevent Internal Server Error
     return [];
   }
 }
@@ -168,15 +236,64 @@ export async function insertArticleToDatabase(
   region: NewsRegion,
   article: Omit<Article, 'id' | 'created_at' | 'updated_at'>
 ): Promise<Article | null> {
+  // #region agent log
+  if (typeof window === 'undefined') {
+    fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:192',message:'insertArticleToDatabase called',data:{region,articleTitle:article.title?.substring(0,50)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+  }
+  // #endregion
   const dbPool = getPool();
   if (!dbPool) {
     console.warn('Database pool not available for insertArticleToDatabase');
+    // #region agent log
+    if (typeof window === 'undefined') {
+      fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:196',message:'Database pool not available for insert',data:{region,articleTitle:article.title?.substring(0,50)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+    }
+    // #endregion
     return null;
   }
 
+  const tableName = getTableName(region);
+  
+  // Check for duplicate article before inserting (by source_url or similar title)
   try {
-    const tableName = getTableName(region);
-
+    // First, check if article with same source_url already exists
+    if (article.source_url) {
+      const duplicateCheck = await dbPool.query(
+        `SELECT id FROM ${tableName} WHERE source_url = $1 LIMIT 1`,
+        [article.source_url]
+      );
+      
+      if (duplicateCheck.rows.length > 0) {
+        console.log(`⚠️ Duplicate article skipped (same source_url): ${article.title?.substring(0, 50)}...`);
+        return null; // Article already exists
+      }
+    }
+    
+    // Also check for similar title (fuzzy match - same title within last 7 days)
+    if (article.title) {
+      const minDate = new Date();
+      minDate.setDate(minDate.getDate() - 7);
+      const minDateISO = minDate.toISOString();
+      
+      const titleCheck = await dbPool.query(
+        `SELECT id, title FROM ${tableName} 
+         WHERE LOWER(title) = LOWER($1) 
+         AND published_at >= $2 
+         LIMIT 1`,
+        [article.title, minDateISO]
+      );
+      
+      if (titleCheck.rows.length > 0) {
+        console.log(`⚠️ Duplicate article skipped (same title): ${article.title?.substring(0, 50)}...`);
+        return null; // Article with same title already exists
+      }
+    }
+  } catch (checkError: any) {
+    // If duplicate check fails, log but continue with insert
+    console.warn('⚠️ Error checking for duplicates, proceeding with insert:', checkError?.message || checkError);
+  }
+  
+  try {
     const query = `
       INSERT INTO ${tableName} (
         title, description, summary, content,
@@ -205,30 +322,140 @@ export async function insertArticleToDatabase(
       article.views,
       article.shares,
       article.comments,
-      article.published_at,
-      article.aggregated_at || new Date().toISOString(),
+      article.published_at || new Date().toISOString(), // Use published_at from website source, fallback to now if missing
+      new Date().toISOString(), // aggregated_at is always current time (when we aggregated it)
     ];
 
     const result = await dbPool.query(query, values);
-
-    if (result.rows && result.rows.length > 0) {
-      return result.rows[0] as Article;
+    const insertedArticle = result.rows[0];
+    
+    console.log(`✅ Article inserted successfully: ${article.title?.substring(0, 60)}...`);
+    console.log(`   ID: ${insertedArticle.id}, Category: ${article.category}, Source: ${article.source_id}`);
+    
+    // #region agent log
+    if (typeof window === 'undefined') {
+      fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:273',message:'Article inserted successfully',data:{region,articleId:insertedArticle.id,articleTitle:article.title?.substring(0,50),category:article.category},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
     }
+    // #endregion
 
-    return null;
+    return {
+      id: insertedArticle.id,
+      title: insertedArticle.title,
+      description: insertedArticle.description || '',
+      summary: insertedArticle.summary,
+      content: insertedArticle.content,
+      image_url: insertedArticle.image_url,
+      preview_image_url: insertedArticle.preview_image_url,
+      source_url: insertedArticle.source_url,
+      source_id: insertedArticle.source_id,
+      category: insertedArticle.category,
+      language: insertedArticle.language,
+      hotness_score: insertedArticle.hotness_score || 0,
+      is_breaking: insertedArticle.is_breaking || false,
+      is_trending: insertedArticle.is_trending || false,
+      views: insertedArticle.views || 0,
+      shares: insertedArticle.shares || 0,
+      comments: insertedArticle.comments || 0,
+      published_at: insertedArticle.published_at,
+      aggregated_at: insertedArticle.aggregated_at,
+      created_at: insertedArticle.created_at,
+      updated_at: insertedArticle.updated_at,
+    };
   } catch (error: any) {
-    console.error('Error inserting article to database:', error);
-    // If connection error, reset pool to allow reconnection
-    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || error.message?.includes('timeout')) {
-      console.warn('Database connection timeout during insert, pool will be reset on next request');
-      pool = null;
+    console.error(`❌ Error inserting article into ${tableName}:`, error);
+    console.error(`   Article title: ${article.title?.substring(0, 60)}...`);
+    console.error(`   Error code: ${error.code}`);
+    console.error(`   Error message: ${error.message}`);
+    console.error(`   Error detail: ${error.detail}`);
+    console.error(`   Error constraint: ${error.constraint}`);
+    
+    // #region agent log
+    if (typeof window === 'undefined') {
+      fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:320',message:'Error inserting article',data:{region,tableName,articleTitle:article.title?.substring(0,50),errorCode:error?.code,errorMessage:error?.message,errorDetail:error?.detail,errorConstraint:error?.constraint},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
     }
+    // #endregion
+    
     return null;
   }
 }
 
 /**
- * Delete old articles (before December 14, 2025) from all region tables
+ * Delete all articles from all tables and reset ID sequences to start from 1
+ */
+export async function deleteAllArticles(): Promise<{ deleted: number; errors: number }> {
+  const dbPool = getPool();
+  if (!dbPool) {
+    console.error('❌ Database pool not available for deleteAllArticles');
+    return { deleted: 0, errors: 1 };
+  }
+
+  let totalDeleted = 0;
+  let totalErrors = 0;
+
+  console.log('🧹 Starting full database cleanup: Deleting ALL articles and resetting ID sequences...');
+
+  try {
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'korea', 'international'];
+
+    for (const table of tables) {
+      try {
+        // First, count articles to be deleted
+        const countResult = await dbPool.query(`SELECT COUNT(*) as count FROM ${table}`);
+        const countToDelete = parseInt(countResult.rows[0]?.count || '0', 10);
+
+        if (countToDelete > 0) {
+          // Delete all articles
+          await dbPool.query(`DELETE FROM ${table}`);
+          console.log(`✅ Deleted ${countToDelete} articles from ${table}`);
+          totalDeleted += countToDelete;
+        } else {
+          console.log(`✓ No articles to delete from ${table}`);
+        }
+
+        // Reset sequence to start from 1
+        // PostgreSQL sequence name format: {table_name}_id_seq
+        try {
+          await dbPool.query(`ALTER SEQUENCE ${table}_id_seq RESTART WITH 1`);
+          console.log(`✅ Reset ID sequence for ${table} to start from 1`);
+        } catch (seqError: any) {
+          console.warn(`⚠️ Could not reset sequence for ${table}:`, seqError?.message || seqError);
+          // Try alternative method if sequence doesn't exist
+          try {
+            const maxIdResult = await dbPool.query(`SELECT MAX(id) as max_id FROM ${table}`);
+            const maxId = maxIdResult.rows[0]?.max_id || 0;
+            if (maxId > 0) {
+              await dbPool.query(`SELECT setval('${table}_id_seq', 1, false)`);
+              console.log(`✅ Reset ID sequence for ${table} using setval`);
+            } else {
+              // No rows, sequence should already be at 1
+              console.log(`✓ Sequence for ${table} already at start (no rows)`);
+            }
+          } catch (setvalError: any) {
+            console.warn(`⚠️ Could not reset sequence using setval for ${table}:`, setvalError?.message || setvalError);
+          }
+        }
+      } catch (error: any) {
+        console.error(`❌ Error processing ${table}:`, error?.message || error);
+        totalErrors++;
+      }
+    }
+
+    if (totalDeleted > 0) {
+      console.log(`🧹 Full cleanup complete: Deleted ${totalDeleted} articles total, all ID sequences reset to 1 (${totalErrors} errors)`);
+    } else {
+      console.log(`✓ Full cleanup complete: No articles found, all ID sequences reset to 1 (${totalErrors} errors)`);
+    }
+
+    return { deleted: totalDeleted, errors: totalErrors };
+  } catch (error: any) {
+    console.error('❌ Error deleting all articles:', error?.message || error);
+    return { deleted: totalDeleted, errors: totalErrors + 1 };
+  }
+}
+
+/**
+ * Delete articles older than December 9, 2025 (including articles from 2020-2024)
+ * This ensures only articles from Dec 9, 2025 onwards are kept
  */
 export async function deleteOldArticles(): Promise<{ deleted: number; errors: number }> {
   const dbPool = getPool();
@@ -236,11 +463,16 @@ export async function deleteOldArticles(): Promise<{ deleted: number; errors: nu
     return { deleted: 0, errors: 1 };
   }
 
-  const minDate = new Date('2025-12-14T00:00:00.000Z');
-  const minDateISO = minDate.toISOString();
+  // Delete articles older than December 9, 2025 (including articles from 2020-2024)
+  // This ensures only articles from Dec 9, 2025 onwards are kept
+  const cutoffDate = new Date('2025-12-09T00:00:00.000Z');
+  const cutoffDateISO = cutoffDate.toISOString();
   
   let totalDeleted = 0;
   let totalErrors = 0;
+
+  console.log(`🧹 Starting cleanup: Deleting articles older than ${cutoffDateISO} (before December 9, 2025)`);
+  console.log(`   This will delete articles from 2020, 2021, 2022, 2023, 2024, and before Dec 9, 2025`);
 
   try {
     const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'korea', 'international'];
@@ -250,27 +482,195 @@ export async function deleteOldArticles(): Promise<{ deleted: number; errors: nu
         // First, count articles to be deleted
         const countResult = await dbPool.query(
           `SELECT COUNT(*) as count FROM ${table} WHERE published_at < $1`,
-          [minDateISO]
+          [cutoffDateISO]
         );
         const countToDelete = parseInt(countResult.rows[0]?.count || '0', 10);
 
-        // Delete articles older than December 14, 2025
-        const deleteResult = await dbPool.query(
-          `DELETE FROM ${table} WHERE published_at < $1`,
-          [minDateISO]
-        );
+        if (countToDelete > 0) {
+          // Delete articles older than December 9, 2025
+          const deleteResult = await dbPool.query(
+            `DELETE FROM ${table} WHERE published_at < $1`,
+            [cutoffDateISO]
+          );
 
-        console.log(`Deleted ${countToDelete} old articles from ${table}`);
-        totalDeleted += countToDelete;
-      } catch (error) {
-        console.error(`Error processing ${table}:`, error);
+          console.log(`✅ Deleted ${countToDelete} old articles from ${table} (before December 9, 2025)`);
+          totalDeleted += countToDelete;
+        } else {
+          console.log(`✓ No old articles to delete from ${table}`);
+        }
+      } catch (error: any) {
+        console.error(`❌ Error processing ${table}:`, error?.message || error);
         totalErrors++;
       }
     }
 
+    if (totalDeleted > 0) {
+      console.log(`🧹 Cleanup complete: Deleted ${totalDeleted} old articles total (${totalErrors} errors)`);
+    } else {
+      console.log(`✓ Cleanup complete: No old articles found (${totalErrors} errors)`);
+    }
+
     return { deleted: totalDeleted, errors: totalErrors };
-  } catch (error) {
-    console.error('Error deleting old articles:', error);
+  } catch (error: any) {
+    console.error('❌ Error deleting old articles:', error?.message || error);
     return { deleted: totalDeleted, errors: totalErrors + 1 };
+  }
+}
+
+/**
+ * Validate and cleanup invalid articles from database
+ * Removes articles that:
+ * 1. Published before December 9, 2025
+ * 2. Have invalid or inaccessible source_url
+ * 3. Missing required fields (title, source_url)
+ * 4. URLs that are not accessible (404, timeout, etc.)
+ */
+export async function cleanupInvalidArticles(): Promise<{ deleted: number; errors: number; details: { dateInvalid: number; urlInvalid: number; missingFields: number; urlNotAccessible: number } }> {
+  const dbPool = getPool();
+  if (!dbPool) {
+    return { deleted: 0, errors: 1, details: { dateInvalid: 0, urlInvalid: 0, missingFields: 0, urlNotAccessible: 0 } };
+  }
+
+  const minDate = new Date('2025-12-09T00:00:00.000Z');
+  const minDateISO = minDate.toISOString();
+  
+  let totalDeleted = 0;
+  let totalErrors = 0;
+  const details = { dateInvalid: 0, urlInvalid: 0, missingFields: 0, urlNotAccessible: 0 };
+  
+  // Import URL validator
+  const { isUrlAccessible } = await import('./url-validator');
+
+  console.log(`🧹 Starting validation cleanup: Checking all articles for validity...`);
+  console.log(`   Criteria:`);
+  console.log(`   1. Published date must be >= December 9, 2025`);
+  console.log(`   2. source_url must be valid and accessible (will test URL accessibility)`);
+  console.log(`   3. Must have title and source_url`);
+  console.log(`   4. source_url must return 200 OK (not 404, timeout, or error)`);
+
+  try {
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'korea', 'international'];
+
+    for (const table of tables) {
+      try {
+        // Get all articles from this table
+        const allArticles = await dbPool.query(`SELECT id, title, source_url, published_at FROM ${table}`);
+        
+        for (const article of allArticles.rows) {
+          let shouldDelete = false;
+          let deleteReason = '';
+
+          // Check 1: Published date must be >= December 9, 2025
+          if (!article.published_at) {
+            shouldDelete = true;
+            deleteReason = 'missing published_at';
+            details.missingFields++;
+          } else {
+            try {
+              const publishedDate = new Date(article.published_at);
+              if (isNaN(publishedDate.getTime()) || publishedDate < minDate) {
+                shouldDelete = true;
+                deleteReason = `published_at before Dec 9, 2025 (${article.published_at})`;
+                details.dateInvalid++;
+              }
+            } catch (dateError) {
+              shouldDelete = true;
+              deleteReason = `invalid published_at format (${article.published_at})`;
+              details.dateInvalid++;
+            }
+          }
+
+          // Check 2: Must have title and source_url
+          if (!article.title || !article.source_url) {
+            shouldDelete = true;
+            deleteReason = 'missing title or source_url';
+            details.missingFields++;
+          }
+
+          // Check 3: source_url must be valid HTTP/HTTPS URL from legitimate sources
+          if (article.source_url) {
+            try {
+              const urlObj = new URL(article.source_url);
+              const isValidProtocol = urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+              const hasHostname = urlObj.hostname.length > 0;
+              
+              // Check if URL is from a legitimate news source domain
+              const validDomains = [
+                'kompas.com', 'detik.com', 'cnnindonesia.com', 'tempo.co', 'antaranews.com',
+                'thejakartapost.com', 'bisnis.com', 'katadata.co.id', 'tvri.go.id', 'republika.co.id',
+                'xinhuanet.com', 'chinadaily.com.cn', 'ecns.cn', 'people.com.cn',
+                'nhk.or.jp', 'asahi.com', 'japantimes.co.jp', 'mainichi.jp',
+                'yna.co.kr', 'kbs.co.kr', 'chosun.com', 'joongang.co.kr',
+                'bbc.com', 'reuters.com', 'apnews.com', 'theguardian.com', 'aljazeera.com', 'cnn.com',
+              ];
+              
+              const urlLower = urlObj.hostname.toLowerCase();
+              const isFromValidDomain = validDomains.some(domain => urlLower.includes(domain));
+              
+              // Reject placeholder, example, or invalid URLs
+              const invalidPatterns = [
+                'example.com', 'placeholder', 'test.com', 'localhost', '127.0.0.1',
+                'dummy', 'fake', 'sample', 'lorem', 'ipsum',
+              ];
+              const hasInvalidPattern = invalidPatterns.some(pattern => urlLower.includes(pattern));
+              
+              if (!isValidProtocol || !hasHostname || !isFromValidDomain || hasInvalidPattern) {
+                shouldDelete = true;
+                deleteReason = `invalid source_url (${article.source_url})`;
+                details.urlInvalid++;
+              } else {
+                // Check URL accessibility (only if URL format is valid)
+                try {
+                  const accessible = await isUrlAccessible(article.source_url, 10000); // 10 second timeout
+                  if (!accessible) {
+                    shouldDelete = true;
+                    deleteReason = `source_url not accessible (404/timeout/error) (${article.source_url})`;
+                    details.urlNotAccessible++;
+                  }
+                } catch (accessError) {
+                  // If accessibility check fails, mark as not accessible
+                  shouldDelete = true;
+                  deleteReason = `source_url accessibility check failed (${article.source_url})`;
+                  details.urlNotAccessible++;
+                }
+              }
+            } catch (urlError) {
+              shouldDelete = true;
+              deleteReason = `invalid source_url format (${article.source_url})`;
+              details.urlInvalid++;
+            }
+          }
+
+          // Delete if invalid
+          if (shouldDelete) {
+            try {
+              await dbPool.query(`DELETE FROM ${table} WHERE id = $1`, [article.id]);
+              totalDeleted++;
+              console.log(`   ❌ Deleted invalid article: ${article.title?.substring(0, 50)}... (${deleteReason})`);
+            } catch (deleteError: any) {
+              console.error(`   ❌ Error deleting article ${article.id}:`, deleteError?.message);
+              totalErrors++;
+            }
+          }
+        }
+      } catch (error: any) {
+        console.error(`❌ Error processing ${table}:`, error?.message || error);
+        totalErrors++;
+      }
+    }
+
+    console.log(`🧹 Validation cleanup complete:`);
+    console.log(`   ✅ Deleted: ${totalDeleted} invalid articles`);
+    console.log(`   📊 Breakdown:`);
+    console.log(`      - Date invalid: ${details.dateInvalid}`);
+    console.log(`      - URL invalid: ${details.urlInvalid}`);
+    console.log(`      - URL not accessible: ${details.urlNotAccessible}`);
+    console.log(`      - Missing fields: ${details.missingFields}`);
+    console.log(`   ❌ Errors: ${totalErrors}`);
+
+    return { deleted: totalDeleted, errors: totalErrors, details };
+  } catch (error: any) {
+    console.error('❌ Error cleaning up invalid articles:', error?.message || error);
+    return { deleted: totalDeleted, errors: totalErrors + 1, details };
   }
 }
