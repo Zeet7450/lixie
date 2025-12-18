@@ -20,6 +20,10 @@ export async function GET(request: Request) {
     }
     // #endregion
     const articles = await fetchArticlesFromDatabase(region, category);
+    
+    // Log for debugging
+    console.log(`📰 API /api/articles: Fetched ${articles.length} articles for region=${region}, category=${category}`);
+    
     // #region agent log
     if (typeof window === 'undefined') {
       fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/articles/route.ts:14',message:'After fetchArticlesFromDatabase',data:{region,category,articlesCount:articles.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
@@ -29,7 +33,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       data: articles,
-      articles: articles, // Also include for backward compatibility
+      articles: articles,
       count: articles.length,
     });
   } catch (error: any) {

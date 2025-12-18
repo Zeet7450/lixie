@@ -51,15 +51,21 @@ if (typeof window === 'undefined') {
 }
 
 // Rate Limiting Configuration
-// Rotasi region setiap 5 menit: id → cn → jp → kr → intl → id (berulang)
-// Setiap region di-fetch setiap 25 menit (5 region × 5 menit)
+// Sistem Efisien Baru:
+// - 1 web = 1 menit untuk eksplorasi
+// - 10 web per region = 10 menit total eksplorasi
+// - Setelah semua web dikunjungi, masuk ke analisis (Groq layer 2/3)
+// - Rotasi region setiap 10 menit: id → cn → kr → intl → id (berulang)
+// - Setiap region di-fetch setiap 40 menit (4 region × 10 menit)
 const RATE_LIMIT = {
   PER_MINUTE: 30, // Groq limit: 30 requests per minute
-  PER_REGION_PER_CYCLE: 10, // 10 requests per region (1 per website)
-  REGIONS: ['id', 'cn', 'jp', 'kr', 'intl'] as NewsRegion[],
-  TOTAL_REGIONS: 5,
-  REGION_ROTATION_INTERVAL: 5 * 60 * 1000, // 5 menit per region (rotasi)
-  RESERVE_REQUESTS: 20, // Reserve for retries (increased to handle queue better)
+  WEBSITES_PER_REGION: 10, // 10 websites per region
+  EXPLORATION_TIME_PER_WEB: 1 * 60 * 1000, // 1 menit per web untuk eksplorasi
+  REGION_CYCLE_DURATION: 10 * 60 * 1000, // 10 menit per region (10 web × 1 menit)
+  REGIONS: ['id', 'cn', 'kr', 'intl'] as NewsRegion[],
+  TOTAL_REGIONS: 4,
+  REGION_ROTATION_INTERVAL: 10 * 60 * 1000, // 10 menit per region (rotasi)
+  RESERVE_REQUESTS: 20, // Reserve for retries
   TARGET_ARTICLES_PER_REGION: 10, // Target 10 articles per region (1 per website)
 };
 
@@ -67,6 +73,15 @@ interface RequestQueue {
   region: NewsRegion;
   timestamp: number;
   retryCount: number;
+}
+
+interface CollectedArticleUrl {
+  url: string;
+  sourceName: string;
+  sourceUrl: string;
+  title?: string;
+  collectedAt: number;
+  isValidated: boolean;
 }
 
 class APIScheduler {
@@ -77,11 +92,17 @@ class APIScheduler {
   public isRunning: boolean = false;
   private scheduledRequests: Map<string, NodeJS.Timeout> = new Map(); // Track scheduled requests
   private regionRotationTimeout: NodeJS.Timeout | null = null; // Timeout untuk rotasi region
+  private webExplorationProgress: Map<NewsRegion, number> = new Map(); // Track berapa web yang sudah dieksplorasi (0-10)
+  private regionAnalysisPending: Map<NewsRegion, boolean> = new Map(); // Track apakah region menunggu analisis
+  private collectedArticleUrls: Map<NewsRegion, CollectedArticleUrl[]> = new Map(); // Store collected URLs per region
 
   constructor() {
-    // Initialize request counts for each region
+    // Initialize request counts and exploration progress for each region
     RATE_LIMIT.REGIONS.forEach(region => {
       this.requestCounts.set(region, 0);
+      this.webExplorationProgress.set(region, 0);
+      this.regionAnalysisPending.set(region, false);
+      this.collectedArticleUrls.set(region, []);
     });
   }
 
@@ -122,22 +143,35 @@ class APIScheduler {
     
     console.log('✅ API Scheduler started with Groq API key configured');
     console.log(`   API Key length: ${runtimeKey.length} characters`);
+    console.log(`   Starting first cycle immediately...`);
     
-    // Clean up old articles (older than 7 days) on startup
-    try {
-      const result = await deleteOldArticles();
-      console.log(`Cleaned up old articles: ${result.deleted} deleted, ${result.errors} errors`);
-    } catch (error) {
-      console.error('Error cleaning up old articles:', error);
-    }
+    // Clean up old articles (older than 7 days) on startup (async, don't block)
+    deleteOldArticles()
+      .then((result) => {
+        if (result.deleted > 0) {
+          console.log(`Cleaned up old articles: ${result.deleted} deleted, ${result.errors} errors`);
+        }
+      })
+      .catch((error) => {
+        console.error('Error cleaning up old articles:', error);
+      });
     
+    // Reset region index to start from beginning
+    this.currentRegionIndex = 0;
+    
+    // Start first cycle immediately (don't wait)
     this.scheduleNextCycle();
+    
+    // Log scheduler status
+    console.log(`📊 Scheduler Status: Running=${this.isRunning}, Current Region Index=${this.currentRegionIndex}`);
+    console.log(`📊 All regions will be processed in rotation: ${RATE_LIMIT.REGIONS.join(' → ')} → ...`);
   }
 
   /**
-   * Schedule rotasi region setiap 5 menit
-   * Urutan: id → cn → jp → kr → intl → id (berulang)
-   * Setiap region di-fetch setiap 25 menit (5 region × 5 menit)
+   * Schedule rotasi region setiap 10 menit
+   * Urutan: id → cn → kr → intl → id (berulang)
+   * Setiap region di-fetch setiap 40 menit (4 region × 10 menit)
+   * Setiap region: 10 menit eksplorasi web (1 menit per web), lalu analisis
    */
   private scheduleNextCycle() {
     if (!this.isRunning) return;
@@ -145,24 +179,46 @@ class APIScheduler {
     // Get current region untuk di-fetch
     const currentRegion = RATE_LIMIT.REGIONS[this.currentRegionIndex];
     
-    console.log(`🔄 API Scheduler: Rotasi region ke ${currentRegion} (${this.currentRegionIndex + 1}/${RATE_LIMIT.TOTAL_REGIONS})`);
-    console.log(`   Setiap region akan di-fetch setiap ${RATE_LIMIT.TOTAL_REGIONS * 5} menit`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🔄 API Scheduler: Rotasi region ke ${currentRegion.toUpperCase()} (${this.currentRegionIndex + 1}/${RATE_LIMIT.TOTAL_REGIONS})`);
+    console.log(`   Setiap region akan di-fetch setiap ${RATE_LIMIT.TOTAL_REGIONS * 10} menit (40 menit)`);
+    console.log(`   Phase: Eksplorasi 10 web (1 menit per web) → Analisis dengan Groq`);
     
-    // Reset request count untuk region ini
+    // Special logging for Korea region
+    if (currentRegion === 'kr') {
+      console.log(`\n🇰🇷 KOREA REGION DETECTED - Starting fetch process...`);
+      console.log(`   Korea sources: ${this.getNewsSources('kr').length} websites configured`);
+      console.log(`   Sources: ${this.getNewsSources('kr').map(s => s.name).join(', ')}`);
+    }
+    console.log(`${'='.repeat(60)}\n`);
+    
+    // Reset exploration progress untuk region ini
+    this.webExplorationProgress.set(currentRegion, 0);
+    this.regionAnalysisPending.set(currentRegion, false);
     this.requestCounts.set(currentRegion, 0);
+    this.collectedArticleUrls.set(currentRegion, []); // Clear collected URLs for new cycle
     
-    // Process region ini (10 requests dengan delay 3 menit per request)
-    this.processRegion(currentRegion);
+    // Start exploration phase: visit 10 websites (1 menit per web)
+    this.startWebExploration(currentRegion);
     
     // Move to next region untuk rotasi berikutnya
     this.currentRegionIndex = (this.currentRegionIndex + 1) % RATE_LIMIT.TOTAL_REGIONS;
     
-    // Schedule next region rotation (5 menit lagi)
+    // Schedule next region rotation (10 menit lagi)
+    // Clear existing timeout if any
+    if (this.regionRotationTimeout) {
+      clearTimeout(this.regionRotationTimeout);
+    }
     this.regionRotationTimeout = setTimeout(() => {
       if (this.isRunning) {
+        const nextRegion = RATE_LIMIT.REGIONS[this.currentRegionIndex];
+        console.log(`🔄 Region rotation timeout triggered, moving to next region: ${nextRegion}`);
+        console.log(`   Current index: ${this.currentRegionIndex}, Next region: ${nextRegion}`);
         this.scheduleNextCycle();
+      } else {
+        console.warn(`⚠️ Region rotation timeout triggered but scheduler is not running`);
       }
-    }, RATE_LIMIT.REGION_ROTATION_INTERVAL); // 5 menit
+    }, RATE_LIMIT.REGION_ROTATION_INTERVAL); // 10 menit
     
     // Clean up old articles (older than Dec 9, 2025) setiap kali rotasi
     deleteOldArticles()
@@ -199,47 +255,345 @@ class APIScheduler {
   }
 
   /**
-   * Process API calls for one region
-   * Schedules all 10 requests per region dengan delay 3 menit per request
+   * Start web exploration phase for a region
+   * Visit 10 websites, 1 website per minute
+   * After all 10 websites are explored, trigger analysis phase
    */
-  private async processRegion(region: NewsRegion) {
-    const now = Date.now();
-    const count = this.requestCounts.get(region) || 0;
+  private startWebExploration(region: NewsRegion) {
+    const sources = this.getNewsSources(region);
+    const websitesCount = sources.length;
+    const explorationTime = websitesCount * RATE_LIMIT.EXPLORATION_TIME_PER_WEB;
     
-    if (count < RATE_LIMIT.PER_REGION_PER_CYCLE) {
-      // Schedule all 10 requests dengan delay 3 menit per request
-      // Request 1: segera, Request 2: +3 menit, Request 3: +6 menit, ... Request 10: +27 menit
-      const requestsToSchedule = RATE_LIMIT.PER_REGION_PER_CYCLE - count;
+    console.log(`🌐 Starting web exploration for region ${region}:`);
+    console.log(`   Will visit ${websitesCount} websites (1 minute per website)`);
+    console.log(`   Total exploration time: ${explorationTime / 1000 / 60} minutes`);
+    
+    // Schedule exploration for each website (1 minute apart)
+    for (let webIndex = 0; webIndex < websitesCount; webIndex++) {
+      const requestKey = `${region}-explore-${webIndex}`;
       
-      for (let i = 0; i < requestsToSchedule; i++) {
-        const requestIndex = count + i; // 0-9
-        const requestKey = `${region}-${requestIndex}`;
+      // Calculate delay: webIndex * 1 minute (0, 1, 2, ... minutes)
+      const delay = webIndex * RATE_LIMIT.EXPLORATION_TIME_PER_WEB;
+      
+      if (delay === 0) {
+        // Execute first website exploration immediately
+        this.exploreWebsite(region, webIndex);
+      } else {
+        // Schedule for future time
+        const timeoutId = setTimeout(() => {
+          this.scheduledRequests.delete(requestKey);
+          this.exploreWebsite(region, webIndex);
+        }, delay);
         
-        // Check if already scheduled
-        if (this.scheduledRequests.has(requestKey)) {
-          continue;
-        }
-        
-        // Calculate delay: requestIndex * 3 minutes (0, 3, 6, 9, ... 27 minutes)
-        const delay = requestIndex * 3 * 60 * 1000; // 3 minutes per request
-        
-        if (delay === 0) {
-          // Execute first request immediately
-          this.fetchNewsForRegion(region);
-        } else {
-          // Schedule for future time
-          const timeoutId = setTimeout(() => {
-            this.scheduledRequests.delete(requestKey);
-            this.fetchNewsForRegion(region);
-          }, delay);
-          
-          this.scheduledRequests.set(requestKey, timeoutId);
-        }
+        this.scheduledRequests.set(requestKey, timeoutId);
       }
     }
     
-    // Process queued requests (only a few at a time)
-    this.processQueue();
+    // Schedule analysis phase after all websites are explored
+    const analysisKey = `${region}-analysis`;
+    const analysisTimeout = setTimeout(() => {
+      this.scheduledRequests.delete(analysisKey);
+      this.startAnalysisPhase(region);
+    }, explorationTime); // Dynamic time based on number of websites
+    
+    this.scheduledRequests.set(analysisKey, analysisTimeout);
+  }
+
+  /**
+   * Explore a single website - ACTUALLY VISIT and collect article URLs
+   * This represents the "layer 1" - visiting and collecting URLs from websites
+   */
+  private async exploreWebsite(region: NewsRegion, webIndex: number) {
+    const progress = this.webExplorationProgress.get(region) || 0;
+    const regionSources = this.getNewsSources(region);
+    const source = regionSources[webIndex];
+    
+    if (!source) {
+      console.error(`❌ [${region}] No source found for index ${webIndex}`);
+      this.webExplorationProgress.set(region, progress + 1);
+      return;
+    }
+    
+    const totalWebsites = regionSources.length;
+    console.log(`🔍 [${region}] Exploring website ${webIndex + 1}/${totalWebsites}: ${source.name} (${source.url})...`);
+    
+    // Special logging for Korea
+    if (region === 'kr') {
+      console.log(`   🇰🇷 KOREA: Visiting ${source.name}...`);
+    }
+    
+    try {
+      // ACTUALLY VISIT the website and collect article URLs
+      const collectedUrls = await this.visitWebsiteAndCollectUrls(source.url, source.name);
+      
+      if (collectedUrls.length > 0) {
+        // Store collected URLs for this region
+        const existingUrls = this.collectedArticleUrls.get(region) || [];
+        const newUrls: CollectedArticleUrl[] = collectedUrls.map(url => ({
+          url,
+          sourceName: source.name,
+          sourceUrl: source.url,
+          collectedAt: Date.now(),
+          isValidated: false, // Will be validated in analysis phase
+        }));
+        
+        this.collectedArticleUrls.set(region, [...existingUrls, ...newUrls]);
+        console.log(`   ✓ Found ${collectedUrls.length} article URL(s) from ${source.name}`);
+        console.log(`   📋 Total collected URLs for ${region}: ${this.collectedArticleUrls.get(region)?.length || 0}`);
+        
+        // Special logging for Korea
+        if (region === 'kr') {
+          console.log(`   🇰🇷 KOREA: Successfully collected ${collectedUrls.length} URL(s) from ${source.name}`);
+        }
+      } else {
+        console.warn(`   ⚠️ No article URLs found from ${source.name}`);
+        
+        // Special logging for Korea
+        if (region === 'kr') {
+          console.warn(`   🇰🇷 KOREA: WARNING - No URLs collected from ${source.name}!`);
+        }
+      }
+    } catch (error: any) {
+      console.error(`   ❌ Error exploring ${source.name}:`, error?.message || error);
+      
+      // Special logging for Korea
+      if (region === 'kr') {
+        console.error(`   🇰🇷 KOREA: ERROR exploring ${source.name} - ${error?.message || 'Unknown error'}`);
+        console.error(`   This may prevent Korea news from being fetched!`);
+      }
+    }
+    
+    // Update progress
+    const totalWebsitesForProgress = regionSources.length;
+    this.webExplorationProgress.set(region, progress + 1);
+    console.log(`   ✓ Website ${webIndex + 1} explored (${this.webExplorationProgress.get(region)}/${totalWebsitesForProgress} complete)`);
+  }
+
+  /**
+   * ACTUALLY VISIT a website and collect article URLs
+   * Fetches the website HTML and extracts article links
+   */
+  private async visitWebsiteAndCollectUrls(websiteUrl: string, sourceName: string): Promise<string[]> {
+    try {
+      console.log(`   🌐 Fetching HTML from ${websiteUrl}...`);
+      
+      // Fetch the website HTML with proper headers
+      const response = await fetch(websiteUrl, {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1',
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000), // 30 second timeout
+      });
+
+      if (!response.ok) {
+        console.warn(`   ⚠️ HTTP ${response.status} from ${websiteUrl}`);
+        return [];
+      }
+
+      const html = await response.text();
+      console.log(`   ✓ Fetched ${html.length} bytes of HTML`);
+      
+      // Extract article URLs from HTML
+      const articleUrls = this.extractArticleUrlsFromHTML(html, websiteUrl, sourceName);
+      
+      // Filter out invalid URL patterns
+      const validUrls = articleUrls.filter(url => this.isValidArticleUrl(url));
+      
+      console.log(`   📊 Extracted ${articleUrls.length} potential URLs, ${validUrls.length} valid`);
+      
+      return validUrls.slice(0, 10); // Limit to 10 URLs per source
+    } catch (error: any) {
+      if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+        console.warn(`   ⚠️ Timeout fetching ${websiteUrl}`);
+      } else {
+        console.error(`   ❌ Error fetching ${websiteUrl}:`, error?.message || error);
+      }
+      return [];
+    }
+  }
+
+  /**
+   * Extract article URLs from HTML content
+   * Looks for links that match article URL patterns
+   */
+  private extractArticleUrlsFromHTML(html: string, baseUrl: string, sourceName: string): string[] {
+    const urls: string[] = [];
+    const baseUrlObj = new URL(baseUrl);
+    
+    // Patterns to find article links in HTML
+    // Look for <a> tags with href attributes
+    const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
+    const matches = html.matchAll(linkRegex);
+    
+    for (const match of matches) {
+      const href = match[1];
+      if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) {
+        continue;
+      }
+      
+      try {
+        // Resolve relative URLs
+        const absoluteUrl = new URL(href, baseUrl).href;
+        
+        // Check if URL looks like an article URL
+        if (this.looksLikeArticleUrl(absoluteUrl, baseUrlObj.hostname)) {
+          urls.push(absoluteUrl);
+        }
+      } catch (e) {
+        // Invalid URL, skip
+        continue;
+      }
+    }
+    
+    // Remove duplicates
+    return Array.from(new Set(urls));
+  }
+
+  /**
+   * Check if URL looks like an article URL
+   * Validates against known article URL patterns
+   */
+  private looksLikeArticleUrl(url: string, hostname: string): boolean {
+    // Must be from the same domain
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.hostname !== hostname && !urlObj.hostname.endsWith('.' + hostname)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    
+    // Check for valid article URL patterns
+    const validPatterns = [
+      /\/news\//i,
+      /\/article\//i,
+      /\/berita\//i,
+      /\/story\//i,
+      /\/read\//i,
+      /\/\d{4}\/\d{2}\/\d{2}\//, // Date pattern: /2025/12/15/
+      /\/\d{8}\//, // Date pattern: /20251215/
+      /\/[a-z-]+\/\d+\//, // Category/ID pattern
+    ];
+    
+    // Check for invalid patterns
+    const invalidPatterns = [
+      /\/view\.php/i,
+      /\/article\.php/i,
+      /\?ud=/i,
+      /\?id=\d+$/i, // Simple ID query params (but allow complex ones)
+    ];
+    
+    // Must match at least one valid pattern
+    const hasValidPattern = validPatterns.some(pattern => pattern.test(url));
+    
+    // Must NOT match invalid patterns
+    const hasInvalidPattern = invalidPatterns.some(pattern => pattern.test(url));
+    
+    // Exclude common non-article pages
+    const excludedPaths = [
+      '/home',
+      '/index',
+      '/about',
+      '/contact',
+      '/search',
+      '/category',
+      '/tag',
+      '/author',
+      '/login',
+      '/register',
+    ];
+    const isExcluded = excludedPaths.some(path => url.toLowerCase().includes(path));
+    
+    return hasValidPattern && !hasInvalidPattern && !isExcluded;
+  }
+
+  /**
+   * Validate article URL (check for invalid patterns)
+   */
+  private isValidArticleUrl(url: string): boolean {
+    // Reject URLs with invalid PHP patterns
+    const invalidPatterns = [
+      /\/view\.php\?ud=/i,
+      /\/view\.php\?id=/i,
+      /\/article\.php\?id=/i,
+    ];
+    
+    return !invalidPatterns.some(pattern => pattern.test(url));
+  }
+
+  /**
+   * Start analysis phase (layer 2/3) after all websites are explored
+   * This is when we call Groq API to analyze and process the collected URLs
+   */
+  private async startAnalysisPhase(region: NewsRegion) {
+    const progress = this.webExplorationProgress.get(region) || 0;
+    const collectedUrls = this.collectedArticleUrls.get(region) || [];
+    
+    if (progress < RATE_LIMIT.WEBSITES_PER_REGION) {
+      console.warn(`⚠️ [${region}] Analysis phase triggered but only ${progress}/${RATE_LIMIT.WEBSITES_PER_REGION} websites explored`);
+      // Wait a bit more or proceed anyway
+    }
+    
+    console.log(`📊 [${region}] Starting analysis phase (Groq layer 2/3)...`);
+    console.log(`   All ${RATE_LIMIT.WEBSITES_PER_REGION} websites have been explored`);
+    console.log(`   Collected ${collectedUrls.length} article URL(s) from exploration phase`);
+    
+    if (collectedUrls.length === 0) {
+      console.warn(`   ⚠️ No URLs collected from exploration phase, proceeding with standard Groq fetch`);
+    } else {
+      // Validate collected URLs before using them
+      console.log(`   🔍 Validating ${collectedUrls.length} collected URLs...`);
+      const validatedUrls = await this.validateCollectedUrls(collectedUrls);
+      console.log(`   ✓ ${validatedUrls.length} URLs validated and ready for analysis`);
+      
+      // Update collected URLs with validation status
+      this.collectedArticleUrls.set(region, validatedUrls);
+    }
+    
+    // Mark region as pending analysis
+    this.regionAnalysisPending.set(region, true);
+    
+    // Now call Groq to analyze and fetch articles
+    // Pass collected URLs to Groq for analysis
+    await this.fetchNewsForRegion(region);
+    
+    // Reset for next cycle
+    this.webExplorationProgress.set(region, 0);
+    this.regionAnalysisPending.set(region, false);
+    // Keep collected URLs until next cycle starts (they'll be cleared in scheduleNextCycle)
+  }
+
+  /**
+   * Validate collected URLs - check if they're accessible
+   */
+  private async validateCollectedUrls(urls: CollectedArticleUrl[]): Promise<CollectedArticleUrl[]> {
+    const validated: CollectedArticleUrl[] = [];
+    
+    // Validate URLs in batches (max 5 concurrent)
+    const batchSize = 5;
+    for (let i = 0; i < urls.length; i += batchSize) {
+      const batch = urls.slice(i, i + batchSize);
+      const validationPromises = batch.map(async (urlData) => {
+        const isAccessible = await isUrlAccessible(urlData.url);
+        return {
+          ...urlData,
+          isValidated: isAccessible,
+        };
+      });
+      
+      const batchResults = await Promise.all(validationPromises);
+      validated.push(...batchResults);
+    }
+    
+    return validated;
   }
 
   /**
@@ -251,7 +605,7 @@ class APIScheduler {
       
       // Check if we've exceeded the limit for this region
       // Allow up to 12 requests if needed (flexible limit for retries)
-      const maxRequests = Math.min(RATE_LIMIT.PER_REGION_PER_CYCLE + 2, 12); // Allow up to 12
+      const maxRequests = Math.min(RATE_LIMIT.WEBSITES_PER_REGION + 2, 12); // Allow up to 12
       
       if (count >= maxRequests) {
         // Use reserve requests if available
@@ -272,10 +626,22 @@ class APIScheduler {
 
       // Increment request count
       this.requestCounts.set(region, count + 1);
-      console.log(`📰 Fetching news for region ${region} (request ${count + 1}/${RATE_LIMIT.PER_REGION_PER_CYCLE})`);
+      console.log(`📰 Fetching news for region ${region} (analysis phase after ${RATE_LIMIT.WEBSITES_PER_REGION} websites explored)`);
 
       // Use Groq to analyze and fetch news
-      console.log(`\n🔄 Starting fetch for region ${region}...`);
+      console.log(`\n${'='.repeat(60)}`);
+      console.log(`🔄 Starting fetch for region ${region.toUpperCase()}...`);
+      
+      // Special logging for Korea
+      if (region === 'kr') {
+        console.log(`🇰🇷 KOREA REGION: Starting Groq API call...`);
+        const collectedUrls = this.collectedArticleUrls.get(region) || [];
+        console.log(`   Collected URLs: ${collectedUrls.length} URLs from web exploration`);
+        if (collectedUrls.length > 0) {
+          console.log(`   Sample URLs: ${collectedUrls.slice(0, 3).map(u => u.url).join(', ')}`);
+        }
+      }
+      console.log(`${'='.repeat(60)}\n`);
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/api-scheduler.ts:253',message:'Starting fetchNewsWithGroq',data:{region,requestCount:count+1},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
       // #endregion
@@ -309,6 +675,27 @@ class APIScheduler {
             if (saved) {
               savedCount++;
               console.log(`    ✅ SAVED to database with ID: ${saved.id}`);
+              
+              // Send notification for hot/breaking news
+              if (saved.is_breaking || (saved.hotness_score >= 80 && saved.is_trending)) {
+                try {
+                  // Import notification function dynamically (client-side only)
+                  if (typeof window !== 'undefined') {
+                    const { sendHotNewsNotification } = await import('./notifications');
+                    await sendHotNewsNotification({
+                      id: saved.id,
+                      title: saved.title || '',
+                      description: saved.description || saved.summary?.substring(0, 100) || '',
+                      category: saved.category || 'other',
+                      region: region,
+                      source_id: saved.source_id || '',
+                    });
+                    console.log(`    🔔 Hot news notification sent for article ID: ${saved.id}`);
+                  }
+                } catch (notifError: any) {
+                  console.warn(`    ⚠️ Failed to send notification: ${notifError?.message || notifError}`);
+                }
+              }
             } else {
               errorCount++;
               console.error(`    ❌ FAILED to save (returned null) - check database logs above`);
@@ -337,9 +724,33 @@ class APIScheduler {
         }
       } else {
         console.log(`⚠️ No articles fetched for region ${region} - Groq API returned empty array`);
+        
+        // Special logging for Korea
+        if (region === 'kr') {
+          console.error(`\n🇰🇷 KOREA REGION: No articles returned!`);
+          console.error(`   This could indicate:`);
+          console.error(`   1. All collected URLs were invalid or inaccessible`);
+          console.error(`   2. Groq API returned empty response`);
+          console.error(`   3. All articles were filtered out (date validation, etc.)`);
+          const collectedUrls = this.collectedArticleUrls.get(region) || [];
+          console.error(`   Collected URLs count: ${collectedUrls.length}`);
+          console.error(`   Validated URLs count: ${collectedUrls.filter(u => u.isValidated).length}`);
+        }
       }
     } catch (error: any) {
-      console.error(`Error fetching news for region ${region}:`, error);
+      console.error(`\n${'='.repeat(60)}`);
+      console.error(`❌ Error fetching news for region ${region.toUpperCase()}:`, error);
+      
+      // Special logging for Korea
+      if (region === 'kr') {
+        console.error(`\n🇰🇷 KOREA REGION ERROR DETECTED!`);
+        console.error(`   Error message: ${error?.message || 'Unknown error'}`);
+        console.error(`   Error code: ${error?.code || 'N/A'}`);
+        console.error(`   Error status: ${error?.status || 'N/A'}`);
+        console.error(`   This is preventing Korea news from being fetched!`);
+      }
+      console.error(`${'='.repeat(60)}\n`);
+      
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/api-scheduler.ts:316',message:'Error in fetchNewsForRegion',data:{region,error:error?.message,errorStack:error?.stack,errorName:error?.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'K'})}).catch(()=>{});
       // #endregion
@@ -421,12 +832,51 @@ class APIScheduler {
       // Get news sources based on region
       const sources = this.getNewsSources(region);
       
+      // Get collected URLs from exploration phase
+      const collectedUrls = this.collectedArticleUrls.get(region) || [];
+      const validatedUrls = collectedUrls.filter(url => url.isValidated);
+      
       const targetLanguage = region === 'id' ? 'Indonesian' : 'English';
       
       // Build sources list with URLs and categories
       const sourcesList = sources.map(s => 
         `- ${s.name} (${s.url}) - Categories: ${s.categories.join(', ')}`
       ).join('\n');
+      
+      // Build collected URLs list for Groq
+      let collectedUrlsSection = '';
+      if (validatedUrls.length > 0) {
+        const urlsBySource = new Map<string, string[]>();
+        validatedUrls.forEach(urlData => {
+          if (!urlsBySource.has(urlData.sourceName)) {
+            urlsBySource.set(urlData.sourceName, []);
+          }
+          urlsBySource.get(urlData.sourceName)!.push(urlData.url);
+        });
+        
+        collectedUrlsSection = `\n\nCOLLECTED ARTICLE URLs FROM EXPLORATION PHASE (ALREADY VALIDATED):
+The following URLs have been collected by actually visiting the websites and validated for accessibility. You MUST use these URLs and analyze the actual articles at these URLs:
+
+${Array.from(urlsBySource.entries()).map(([sourceName, urls]) => 
+  `${sourceName}:\n${urls.map((url, idx) => `  ${idx + 1}. ${url}`).join('\n')}`
+).join('\n\n')}
+
+CRITICAL: These URLs have been verified to be:
+- ✅ Actually accessible (not 404, not timeout)
+- ✅ Real article URLs (not invalid patterns like /view.php?ud=)
+- ✅ From legitimate news sources
+- ✅ Collected by actually visiting the websites
+
+You MUST:
+1. Visit each of these URLs in your browser
+2. Read the complete article content
+3. Extract accurate information from the actual article pages
+4. Use the EXACT URL provided (do not modify or construct new URLs)
+5. Verify the publish date is from December 9, 2025 onwards
+6. Extract real images, titles, and summaries from the actual article pages
+
+If a URL is not accessible or the article is not from December 9, 2025 onwards, skip it and use the source website to find a valid article instead.`;
+      }
       
       // Calculate date range: only articles from December 9, 2025 onwards
       const minDate = new Date('2025-12-09T00:00:00.000Z');
@@ -441,11 +891,17 @@ class APIScheduler {
         day: 'numeric' 
       });
 
-      const prompt = `You are a news aggregator bot with REAL-TIME web browsing capabilities. Your task is to fetch and analyze the latest trending and breaking news from ${region} region by ACTUALLY VISITING and READING the source websites.
+      // Special prompt for Korea region (K-pop focus)
+      const isKoreaRegion = region === 'kr';
+      const regionSpecificInstruction = isKoreaRegion 
+        ? `\n\n🇰🇷 KOREA REGION - K-POP FOCUS:\nThis region is specifically configured for K-POP news only. You MUST:\n- Focus EXCLUSIVELY on K-pop, K-pop idols, K-pop groups, K-pop music, K-pop entertainment news\n- Visit Soompi, Allkpop, and Yonhap News for the latest K-pop updates\n- Prioritize breaking K-pop news, idol activities, comebacks, music releases, concerts, awards, scandals, and entertainment industry news\n- Extract information about K-pop groups, idols, songs, albums, music videos, performances, and related entertainment content\n- Categorize articles as "entertainment" for K-pop related content\n- Ensure all articles are about K-pop, Korean entertainment, or Korean pop culture\n- DO NOT include general Korean news (politics, economy, etc.) - ONLY K-pop and entertainment news\n`
+        : '';
+      
+      const prompt = `You are a news aggregator bot with REAL-TIME web browsing capabilities. Your task is to fetch and analyze the latest trending and breaking news from ${region} region by ACTUALLY VISITING and READING the source websites.${regionSpecificInstruction}
 
 CRITICAL WEB BROWSING REQUIREMENTS:
 1. You MUST use your web browsing tool to actually visit each of these verified news sources:
-${sourcesList}
+${sourcesList}${collectedUrlsSection}
 
 2. For EACH source website, you MUST:
    a. Open the website URL in your browser (e.g., visit https://www.kompas.com)
@@ -472,7 +928,17 @@ CRITICAL DATE REQUIREMENT - READ CAREFULLY:
 - Ensure articles are fresh and current (from ${minDateStr} to ${todayDateStr})
 
 STEP-BY-STEP INSTRUCTIONS (MUST FOLLOW - USE YOUR WEB BROWSER):
-1. For EACH of the 10 sources listed above, you MUST:
+${validatedUrls.length > 0 ? `PRIORITY: Use the COLLECTED ARTICLE URLs provided above first. These URLs have been pre-validated and collected by actually visiting the websites. For each collected URL:
+   a. Open the URL directly in your browser (the URL is already provided above)
+   b. Wait for the page to fully load
+   c. Read the COMPLETE article content (scroll through the entire article)
+   d. Verify the publish date is from December 9, 2025 onwards
+   e. Extract information directly from the actual article page
+   f. Use the EXACT URL provided (do not modify it)
+   
+If a collected URL is not accessible or the article is too old, then proceed to visit the source website directly as described below.
+
+` : ''}1. For EACH of the 10 sources listed above${validatedUrls.length > 0 ? ' (or use collected URLs if provided)' : ''}, you MUST:
    a. Open your web browser and visit the website URL (e.g., https://www.kompas.com)
    b. Navigate to their latest news section or homepage using the website's navigation
    c. Browse through the articles and find ones published from December 9, 2025 onwards
@@ -509,9 +975,13 @@ STEP-BY-STEP INSTRUCTIONS (MUST FOLLOW - USE YOUR WEB BROWSER):
    - Extract the REAL image URL from the article page (check og:image, main image, or article content)
    - Copy the EXACT article URL (test it to make sure it works)
 
-5. Ensure you get articles from ALL categories: technology, politics, economy, business, entertainment, sports, health, science, education, environment (including natural disasters, climate change, environmental issues), travel, food, fashion, automotive, real-estate, history
+5. ${isKoreaRegion 
+  ? 'For KOREA region: Focus EXCLUSIVELY on K-pop and entertainment news. Categories should be primarily "entertainment" for K-pop content. Include news about K-pop groups, idols, music releases, concerts, awards, entertainment industry, and Korean pop culture.'
+  : 'Ensure you get articles from ALL categories: technology, politics, economy, business, entertainment, sports, health, science, education, environment (including natural disasters, climate change, environmental issues), travel, food, fashion, automotive, real-estate, history'}
 
-6. PRIORITIZE environment/disaster news: Include natural disasters, climate events, environmental emergencies from each region when available
+6. ${isKoreaRegion 
+  ? 'PRIORITIZE K-pop breaking news: Include latest K-pop comebacks, idol activities, music releases, concerts, awards shows, entertainment industry news, and trending K-pop topics.'
+  : 'PRIORITIZE environment/disaster news: Include natural disasters, climate events, environmental emergencies from each region when available'}
 
 7. VERIFICATION: Before including an article, verify:
    - The URL actually exists and is accessible (you can visit it)
@@ -519,10 +989,10 @@ STEP-BY-STEP INSTRUCTIONS (MUST FOLLOW - USE YOUR WEB BROWSER):
    - The article has real content (not just a placeholder or error page)
    - The image URL is real and from the source website
 
-Return a JSON object with an "articles" array containing exactly 1 article per source (10 articles total for 10 sources, prioritize quality, ensure articles are from ${minDateStr} (December 9, 2025) onwards). Each article must have:
+Return a JSON object with an "articles" array containing exactly 1 article per source (${sources.length} articles total for ${sources.length} sources${isKoreaRegion ? ' - ALL MUST BE K-POP RELATED' : ''}, prioritize quality, ensure articles are from ${minDateStr} (December 9, 2025) onwards). Each article must have:
 - title: EXACT title from source website (do NOT translate or modify, preserve original language)
 - description: Brief 1-2 sentence description in ${targetLanguage}
-- summary: Clear and well-structured 1-2 paragraph summary in ${targetLanguage}. Make it concise, readable, and informative, covering the main points of the article. Keep it brief (1-2 paragraphs only, not longer)
+- summary: Comprehensive and detailed 2-paragraph summary in ${targetLanguage}. Write a clear, well-structured summary that thoroughly covers all main points, key facts, figures, context, and important details from the article. The summary should be informative and complete (exactly 2 paragraphs, not shorter). Each paragraph should be substantial (at least 3-4 sentences) and provide sufficient information so readers can understand the full story without reading the original article. Include specific details, names, dates, numbers, and context where relevant.
 - source_url: EXACT URL of the original article (must be a REAL, ACCESSIBLE URL that you have actually visited and verified works. Test the URL before including it. Do NOT make up URLs or use placeholder URLs)
 - source_id: News source name (e.g., "BBC News", "Kompas", "Reuters")
 - category: Map to one of these categories: technology, politics, economy, business, entertainment, sports, health, science, education, environment, travel, food, fashion, automotive, real-estate, history. Match the article's category from the source website.
@@ -546,11 +1016,15 @@ CRITICAL REQUIREMENTS:
    - Article featured image
    - Do NOT use placeholder images, generic URLs, or stock photos
    - Image URLs should be from the source website's domain
-4. Summary: Write a clear, well-structured summary in ${targetLanguage} that:
-   - Covers the main points of the article
-   - Is 1-2 paragraphs long (concise, not longer)
-   - Is easy to read and understand
-   - Includes key facts, figures, and context
+4. Summary: Write a comprehensive, detailed 2-paragraph summary in ${targetLanguage} that:
+   - Thoroughly covers ALL main points, key facts, figures, and context from the article
+   - Is exactly 2 paragraphs long (not shorter, not longer)
+   - Each paragraph should be substantial (at least 3-4 sentences per paragraph)
+   - Is clear, well-structured, and easy to read
+   - Includes specific details, names, dates, numbers, and important context
+   - Provides sufficient information so readers can fully understand the story without reading the original article
+   - First paragraph: Cover the main event, who, what, when, where, and why
+   - Second paragraph: Cover additional details, implications, background context, or related information
 5. Source URL: Must be the EXACT URL from your browser's address bar after you have opened and read the article. CRITICAL STEPS:
    a. Open the article in your browser
    b. Wait for the page to fully load
@@ -603,7 +1077,7 @@ CRITICAL VERIFICATION REQUIREMENTS (USE YOUR WEB BROWSER):
 - You MUST extract the EXACT publish date from the article page you have open (look for "Published:", "Tanggal:", "Date:", "Diterbitkan:", or similar metadata visible on the page)
 - You MUST extract the REAL image URL from the article page you see in your browser (check og:image meta tag, main article image, or featured image)
 - You MUST verify the article content exists and is complete by reading the full article text in your browser
-- You MUST write a detailed summary (1-2 paragraphs, minimum 50 characters) based on the article content you actually read
+- You MUST write a comprehensive, detailed summary (exactly 2 paragraphs, minimum 200 characters per paragraph) based on the article content you actually read. Each paragraph must be substantial and informative, covering different aspects of the story
 - You MUST ensure the article URL is accessible - if you can't open it in your browser, don't include it
 - You MUST only include articles that you have successfully opened, read, and verified in your browser
 
@@ -625,7 +1099,7 @@ CRITICAL VERIFICATION CHECKLIST (for each article before including):
 5. ✅ The URL looks like a real article URL (contains /news/, /article/, /berita/, /story/, or date pattern)
 6. ✅ You have tested the URL by refreshing or opening it again (it works!)
 7. ✅ The publish date is clearly visible on the page and is from December 9, 2025 onwards
-8. ✅ You have written a complete summary (1-2 paragraphs, at least 50 characters) based on the article you read
+8. ✅ You have written a comprehensive summary (exactly 2 paragraphs, each at least 200 characters) that thoroughly covers all main points and details from the article you read
 9. ✅ The article image is visible on the page and you can extract its URL
 10. ✅ The article is from one of the 10 verified sources listed above
 
@@ -912,8 +1386,7 @@ IMPORTANT:
               'bbc.com', 'reuters.com', 'apnews.com', 'theguardian.com', 'aljazeera.com',
               'kompas.com', 'detik.com', 'cnnindonesia.com',
               'xinhuanet.com', 'chinadaily.com.cn',
-              'nhk.or.jp', 'asahi.com', 'japantimes.co.jp',
-              'yna.co.kr', 'kbs.co.kr',
+              'yna.co.kr', 'soompi.com', 'allkpop.com',
             ];
             
             // Allow images from source domains or common CDN/image hosting
@@ -937,8 +1410,7 @@ IMPORTANT:
                 'kompas.com', 'detik.com', 'cnnindonesia.com', 'tempo.co', 'antaranews.com',
                 'thejakartapost.com', 'bisnis.com', 'katadata.co.id', 'tvri.go.id', 'republika.co.id',
                 'xinhuanet.com', 'chinadaily.com.cn', 'ecns.cn', 'people.com.cn',
-                'nhk.or.jp', 'asahi.com', 'japantimes.co.jp', 'mainichi.jp',
-                'yna.co.kr', 'kbs.co.kr', 'chosun.com', 'joongang.co.kr',
+                'yna.co.kr', 'soompi.com', 'allkpop.com',
                 'bbc.com', 'reuters.com', 'apnews.com', 'theguardian.com', 'aljazeera.com', 'cnn.com',
               ];
               
@@ -1222,108 +1694,21 @@ IMPORTANT:
           categories: ['China', 'World', 'Business', 'Culture', 'Tech', 'Environment']
         }
       ],
-      'jp': [
-        {
-          name: 'NHK World-Japan',
-          url: 'https://www3.nhk.or.jp/nhkworld/',
-          categories: ['News (Asia, World, Japan)', 'Business', 'Culture', 'Science', 'Environment']
-        },
-        {
-          name: 'The Japan Times',
-          url: 'https://www.japantimes.co.jp',
-          categories: ['News (National, World, Business)', 'Opinion', 'Community', 'Culture', 'Sports', 'Life', 'Environment']
-        },
-        {
-          name: 'The Asahi Shimbun',
-          url: 'https://www.asahi.com/ajw/',
-          categories: ['Politics', 'Economy', 'Society', 'Sports', 'Culture', 'Science & Tech', 'International', 'Environment']
-        },
-        {
-          name: 'Kyodo News',
-          url: 'https://english.kyodonews.net',
-          categories: ['Politics', 'Business', 'World', 'Society', 'Culture', 'Sports', 'Environment']
-        },
-        {
-          name: 'Nikkei Asia',
-          url: 'https://asia.nikkei.com',
-          categories: ['Business', 'Markets', 'Economy', 'Tech', 'Politics', 'Environment']
-        },
-        {
-          name: 'The Mainichi',
-          url: 'https://mainichi.jp/english/',
-          categories: ['Politics', 'Business', 'Society', 'Culture', 'Sports', 'Environment']
-        },
-        {
-          name: 'The Yomiuri Shimbun',
-          url: 'https://japannews.yomiuri.co.jp',
-          categories: ['Politics', 'Business', 'World', 'Society', 'Culture', 'Sports', 'Environment']
-        },
-        {
-          name: 'Japan Today',
-          url: 'https://japantoday.com',
-          categories: ['Japan', 'World', 'Business', 'Tech', 'Culture', 'Lifestyle', 'Environment']
-        },
-        {
-          name: 'Nippon.com',
-          url: 'https://www.nippon.com',
-          categories: ['Culture', 'Society', 'Business', 'Politics', 'Tech', 'Environment']
-        },
-        {
-          name: 'Jiji Press',
-          url: 'https://jen.jiji.com',
-          categories: ['Politics', 'Business', 'World', 'Society', 'Culture', 'Sports', 'Environment']
-        }
-      ],
       'kr': [
-        {
-          name: 'Yonhap News Agency',
-          url: 'https://en.yna.co.kr',
-          categories: ['Politics', 'Economy', 'Society', 'Culture', 'Sports', 'World', 'Sci/Tech', 'Entertainment', 'Environment']
-        },
-        {
-          name: 'The Korea Herald',
-          url: 'https://www.koreaherald.com',
-          categories: ['Politics', 'Business', 'World', 'Tech', 'Culture', 'Sports', 'Lifestyle', 'Environment']
-        },
-        {
-          name: 'The Korea Times',
-          url: 'https://www.koreatimes.co.kr',
-          categories: ['Politics', 'Business', 'World', 'Tech', 'Culture', 'Sports', 'Lifestyle', 'Environment']
-        },
-        {
-          name: 'KBS World',
-          url: 'https://world.kbs.co.kr',
-          categories: ['Politics', 'Economy', 'Society', 'International', 'Culture', 'Sports', 'Environment']
-        },
-        {
-          name: 'Korea JoongAng Daily',
-          url: 'https://koreajoongangdaily.joins.com',
-          categories: ['Politics', 'Business', 'World', 'Tech', 'Culture', 'Sports', 'Lifestyle', 'Environment']
-        },
-        {
-          name: 'The Chosun Ilbo',
-          url: 'https://english.chosun.com',
-          categories: ['Politics', 'Business', 'World', 'Society', 'Culture', 'Sports', 'Environment']
-        },
-        {
-          name: 'Hankyoreh',
-          url: 'https://english.hani.co.kr',
-          categories: ['Politics', 'Business', 'Society', 'Culture', 'Sports', 'Environment']
-        },
-        {
-          name: 'Pulse News',
-          url: 'https://pulsenews.co.kr',
-          categories: ['Business', 'Economy', 'Finance', 'Tech', 'Markets', 'Environment']
-        },
-        {
-          name: 'The Dong-A Ilbo',
-          url: 'https://www.donga.com/en',
-          categories: ['Politics', 'Business', 'World', 'Society', 'Culture', 'Sports', 'Environment']
-        },
         {
           name: 'Soompi',
           url: 'https://www.soompi.com',
-          categories: ['Entertainment', 'K-Pop', 'Culture', 'Lifestyle', 'Music', 'TV', 'Environment']
+          categories: ['Entertainment', 'K-Pop', 'K-pop News', 'Idol News', 'Music', 'TV Shows', 'Drama', 'Celebrity', 'Culture', 'Lifestyle']
+        },
+        {
+          name: 'Allkpop',
+          url: 'https://www.allkpop.com',
+          categories: ['K-Pop', 'K-pop News', 'Idol News', 'Entertainment', 'Music', 'Celebrity', 'Drama', 'TV Shows', 'Culture', 'Lifestyle']
+        },
+        {
+          name: 'Yonhap News Agency',
+          url: 'https://en.yna.co.kr',
+          categories: ['K-Pop', 'Entertainment', 'Culture', 'Music', 'Celebrity', 'K-pop News', 'Idol News', 'Drama', 'TV Shows']
         }
       ],
       'intl': [

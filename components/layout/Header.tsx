@@ -3,7 +3,7 @@
 import { motion } from 'framer-motion';
 import { useAnimation } from '@/hooks/useAnimation';
 import { useState } from 'react';
-import { Search, Moon, Sun, BarChart3 } from 'lucide-react';
+import { Search, LayoutPanelLeft } from 'lucide-react';
 import { LixieLogo } from '@/components/icons/LixieLogo';
 import { useLanguage } from '@/hooks/useLanguage';
 import { useDarkMode } from '@/hooks/useDarkMode';
@@ -16,23 +16,23 @@ interface HeaderProps {
 export function Header({ onSidebarToggle }: HeaderProps) {
   const { config } = useAnimation();
   const { t } = useLanguage();
-  const { isDarkMode, toggleDarkMode } = useDarkMode();
   const { region, setRegion, getDisplayLanguage } = useRegionStore();
   const displayLanguage = getDisplayLanguage();
   const [isSearchActive, setIsSearchActive] = useState(false);
 
-  const regions: { value: AppRegion; label: string }[] = [
-    { value: 'id', label: 'ID' },
-    { value: 'en', label: 'EN' },
-    { value: 'cn', label: 'CN' },
-    { value: 'jp', label: 'JP' },
-    { value: 'kr', label: 'KR' },
-  ];
+  // Region emojis/icons (simple animals representing each region)
+  const regionEmojis: Record<AppRegion, string> = {
+    'id': '🦏', // Rhinoceros (represents Indonesia)
+    'cn': '🐼', // Panda (represents China)
+    'kr': '🐰', // White Rabbit (represents K-pop)
+    'intl': '🌍', // Earth Planet (represents international/global)
+  };
 
   const handleRegionChange = () => {
-    const currentIndex = regions.findIndex(r => r.value === region);
-    const nextIndex = (currentIndex + 1) % regions.length;
-    setRegion(regions[nextIndex].value);
+    const allRegions: AppRegion[] = ['id', 'cn', 'kr', 'intl'];
+    const currentIndex = allRegions.findIndex(r => r === region);
+    const nextIndex = (currentIndex + 1) % allRegions.length;
+    setRegion(allRegions[nextIndex]);
   };
 
   return (
@@ -124,76 +124,34 @@ export function Header({ onSidebarToggle }: HeaderProps) {
             delayChildren: 0.25,
           }}
         >
-          {/* REGION SELECTOR */}
+          {/* REGION SELECTOR - Only Emoji */}
           <motion.button
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={config.Transitions.standard as any}
             onClick={handleRegionChange}
-            className="flex items-center gap-1 px-3 py-2 rounded-full hover:bg-rose-200/30 dark:hover:bg-rose-900/30 transition-colors font-medium text-sm"
-            whileTap={{ scale: 0.95 }}
+            className="p-2 rounded-full hover:bg-rose-200/30 dark:hover:bg-rose-900/30 transition-colors"
+            whileTap={{ scale: 0.9 }}
+            whileHover={{ scale: 1.1 }}
             title={displayLanguage === 'id' ? 'Pilih Region Berita' : 'Select News Region'}
           >
-            <span className="text-emerald-700 dark:text-cream-300">
-              {regions.find(r => r.value === region)?.label || 'ID'}
+            <span className="text-lg sm:text-xl" role="img" aria-label={`Region ${region}`}>
+              {regionEmojis[region] || '🦏'}
             </span>
           </motion.button>
 
-          {/* SIDEBAR TOGGLE (Desktop) */}
-          {onSidebarToggle && (
-            <motion.button
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={config.Transitions.standard as any}
-              onClick={onSidebarToggle}
-              className="hidden lg:flex p-2 rounded-full hover:bg-rose-200/30 dark:hover:bg-rose-900/30 transition-colors"
-              whileTap={{ scale: 0.95 }}
-              title="Analytics Dashboard"
-            >
-              <BarChart3 size={20} className="text-emerald-700 dark:text-cream-300" />
-            </motion.button>
-          )}
-
-          {/* DARK MODE TOGGLE */}
+          {/* SIDEBAR TOGGLE */}
           <motion.button
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={config.Transitions.standard as any}
-            onClick={toggleDarkMode}
+            onClick={onSidebarToggle || (() => {})}
             className="p-2 rounded-full hover:bg-rose-200/30 dark:hover:bg-rose-900/30 transition-colors"
             whileTap={{ scale: 0.95 }}
+            title={displayLanguage === 'id' ? 'Toggle Sidebar' : 'Toggle Sidebar'}
           >
-            <motion.div
-              animate={{
-                rotate: isDarkMode ? 0 : 180,
-              }}
-              transition={{
-                duration: 0.5,
-                ease: config.Easings.standard as any,
-              }}
-            >
-              {isDarkMode ? (
-                <Moon size={20} className="text-emerald-700 dark:text-cream-300" />
-              ) : (
-                <Sun size={20} className="text-emerald-700 dark:text-cream-300" />
-              )}
-            </motion.div>
+            <LayoutPanelLeft size={20} className="text-emerald-700 dark:text-cream-300" />
           </motion.button>
-
-          {/* SIDEBAR TOGGLE (Mobile) */}
-          {onSidebarToggle && (
-            <motion.button
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={config.Transitions.standard as any}
-              onClick={onSidebarToggle}
-              className="lg:hidden p-2 rounded-full hover:bg-rose-200/30 dark:hover:bg-rose-900/30 transition-colors"
-              whileTap={{ scale: 0.95 }}
-              title="Analytics Dashboard"
-            >
-              <BarChart3 size={20} className="text-emerald-700 dark:text-cream-300" />
-            </motion.button>
-          )}
         </motion.div>
       </div>
     </motion.header>

@@ -51,29 +51,42 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
       clicks: [],
 
       addReading: (articleId, category, readDuration) => {
-        set((state) => ({
-          readings: [
-            ...state.readings,
-            {
-              articleId,
-              category,
-              timestamp: Date.now(),
-              readDuration,
-            },
-          ],
-        }));
+        set((state) => {
+          // Check if this article has already been read (unique reads only)
+          const alreadyRead = state.readings.some(r => r.articleId === articleId);
+          
+          // Only add if not already read (unique reads)
+          if (alreadyRead) {
+            return state; // Don't add duplicate reads
+          }
+          
+          return {
+            readings: [
+              ...state.readings,
+              {
+                articleId,
+                category,
+                timestamp: Date.now(),
+                readDuration,
+              },
+            ],
+          };
+        });
       },
 
       addClick: (articleId) => {
-        set((state) => ({
-          clicks: [
-            ...state.clicks,
-            {
-              articleId,
-              timestamp: Date.now(),
-            },
-          ],
-        }));
+        console.log(`📊 addClick called for article ID: ${articleId}`);
+        set((state) => {
+          const newClick = {
+            articleId,
+            timestamp: Date.now(),
+          };
+          const newClicks = [...state.clicks, newClick];
+          console.log(`📊 Click added. Total clicks: ${newClicks.length}`);
+          return {
+            clicks: newClicks,
+          };
+        });
       },
 
       resetAnalytics: () => {
@@ -129,11 +142,15 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
       },
 
       getTotalClicks: (timeRange) => {
+        // Total clicks: count all clicks (even if same article clicked multiple times)
         return get().getClicksByTimeRange(timeRange).length;
       },
 
       getTotalReadings: (timeRange) => {
-        return get().getReadingsByTimeRange(timeRange).length;
+        // Unique readings: count only unique article IDs (same article = 1 read)
+        const readings = get().getReadingsByTimeRange(timeRange);
+        const uniqueArticleIds = new Set(readings.map(r => r.articleId));
+        return uniqueArticleIds.size;
       },
     }),
     {

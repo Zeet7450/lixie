@@ -35,12 +35,12 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="w-full overflow-x-hidden">
       <head>
-        {/* PWA Icons for iOS and Android */}
-        <link rel="icon" href="/icon-192x192.png" sizes="192x192" type="image/png" />
-        <link rel="icon" href="/icon-512x512.png" sizes="512x512" type="image/png" />
-        <link rel="apple-touch-icon" href="/icon-192x192.png" />
-        <link rel="apple-touch-icon" sizes="192x192" href="/icon-192x192.png" />
-        <link rel="apple-touch-icon" sizes="512x512" href="/icon-512x512.png" />
+        {/* PWA Icons for iOS and Android - Using Lixie Logo */}
+        <link rel="icon" href="/images/logo-lixie.png" sizes="192x192" type="image/png" />
+        <link rel="icon" href="/images/logo-lixie.png" sizes="512x512" type="image/png" />
+        <link rel="apple-touch-icon" href="/images/logo-lixie.png" />
+        <link rel="apple-touch-icon" sizes="192x192" href="/images/logo-lixie.png" />
+        <link rel="apple-touch-icon" sizes="512x512" href="/images/logo-lixie.png" />
         {/* PWA Manifest Link */}
         <link rel="manifest" href="/manifest.json" />
         {/* Mobile Fullscreen Meta Tags */}

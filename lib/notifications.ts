@@ -102,8 +102,7 @@ export async function sendHotNewsNotification(
   const regionNames: Record<string, string> = {
     'id': 'Indonesia',
     'cn': 'China',
-    'jp': 'Japan',
-    'kr': 'Korea',
+    'kr': 'K-pop',
     'intl': 'Internasional',
   };
 

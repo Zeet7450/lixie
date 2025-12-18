@@ -9,6 +9,7 @@ import { CategoryTabs } from '@/components/features/CategoryTabs';
 import { NewsFeed } from '@/components/features/NewsFeed';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { SplashScreen } from '@/components/common/SplashScreen';
+import { BarChart3 } from 'lucide-react';
 // API scheduler will be started via API route (server-side)
 import { clearAllArticleCaches } from '@/lib/cache-cleanup';
 import { useAnalyticsStore } from '@/store/analytics';
@@ -24,6 +25,7 @@ export default function Home() {
   const [activeCategory, setActiveCategory] = useState('all');
   const [mounted, setMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showDeleteMenu, setShowDeleteMenu] = useState(false);
   const { resetAnalytics } = useAnalyticsStore();
   const { setArticles } = useArticlesStore();
 
@@ -108,13 +110,21 @@ export default function Home() {
           transition={{ duration: 0.3, delay: 0.1 }}
           className={showSplash ? 'hidden' : ''}
         >
-          <Header onSidebarToggle={() => setSidebarOpen(true)} />
+          <Header onSidebarToggle={() => setSidebarOpen(!sidebarOpen)} />
           <CategoryTabs
             activeCategory={activeCategory}
             onCategoryChange={setActiveCategory}
           />
           <NewsFeed category={activeCategory} />
-          <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+          <Sidebar 
+            isOpen={sidebarOpen} 
+            onClose={() => {
+              setSidebarOpen(false);
+              setShowDeleteMenu(false);
+            }}
+            showDeleteMenu={showDeleteMenu}
+            onDeleteMenuToggle={() => setShowDeleteMenu(!showDeleteMenu)}
+          />
           <NotificationPrompt />
         </motion.div>
       </motion.div>

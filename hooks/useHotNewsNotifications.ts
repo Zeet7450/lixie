@@ -56,12 +56,6 @@ export function useHotNewsNotifications() {
                    articleSource.includes('ecns') ||
                    articleSource.includes('ciie')) {
           region = 'cn';
-        } else if (articleLanguage === 'ja' || 
-                   articleSource.includes('nhk') || 
-                   articleSource.includes('asahi') || 
-                   articleSource.includes('japan times') ||
-                   articleSource.includes('reuters') && article.title.toLowerCase().includes('japan')) {
-          region = 'jp';
         } else if (articleLanguage === 'ko' || 
                    articleSource.includes('yonhap') || 
                    articleSource.includes('kbs') ||

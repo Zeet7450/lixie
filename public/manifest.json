@@ -13,25 +13,25 @@
   "permissions": ["notifications"],
   "icons": [
     {
-      "src": "/icon-192x192.png",
+      "src": "/images/logo-lixie.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512x512.png",
+      "src": "/images/logo-lixie.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-192x192.png",
+      "src": "/images/logo-lixie.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "/icon-512x512.png",
+      "src": "/images/logo-lixie.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

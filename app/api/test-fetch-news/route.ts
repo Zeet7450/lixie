@@ -7,7 +7,7 @@ import { apiScheduler } from '@/lib/api-scheduler';
 export async function POST(request?: Request) {
   try {
     // Get region from request body or default to 'id'
-    let region: 'id' | 'cn' | 'jp' | 'kr' | 'intl' = 'id';
+    let region: 'id' | 'cn' | 'kr' | 'intl' = 'id';
     
     if (request) {
       try {

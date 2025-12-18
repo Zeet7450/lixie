@@ -25,11 +25,12 @@ export function getPool(): Pool | null {
         },
         max: 5, // Reduce max connections to avoid timeout
         min: 0, // Don't keep connections alive (let them close when idle)
-        idleTimeoutMillis: 10000, // Close idle connections faster
+        idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
         connectionTimeoutMillis: 20000, // Increase to 20 seconds for Neon
         statement_timeout: 30000, // 30 seconds for queries
         query_timeout: 30000,
-        keepAlive: false, // Disable keepalive to avoid connection issues
+        keepAlive: true, // Enable keepalive to maintain connections
+        allowExitOnIdle: true, // Allow pool to close when idle
       });
       
       // #region agent log
@@ -55,8 +56,25 @@ export function getPool(): Pool | null {
         let retries = 3;
         while (retries > 0) {
           try {
-            const client = await pool!.connect();
-            await client.query('SELECT 1');
+            if (!pool) {
+              throw new Error('Pool is null');
+            }
+            
+            // Use Promise.race to add timeout
+            const client = await Promise.race([
+              pool.connect(),
+              new Promise<never>((_, reject) => 
+                setTimeout(() => reject(new Error('Connection timeout')), 25000)
+              )
+            ]);
+            
+            await Promise.race([
+              client.query('SELECT 1'),
+              new Promise<never>((_, reject) => 
+                setTimeout(() => reject(new Error('Query timeout')), 10000)
+              )
+            ]);
+            
             client.release();
             console.log('✓ Database connection successful');
             // #region agent log
@@ -67,13 +85,26 @@ export function getPool(): Pool | null {
             break;
           } catch (err: any) {
             retries--;
+            const isTimeout = err?.code === 'ETIMEDOUT' || 
+                             err?.message?.includes('timeout') ||
+                             err?.message === 'Connection timeout' ||
+                             err?.message === 'Query timeout' ||
+                             err?.name === 'AggregateError';
+            
             // #region agent log
             if (typeof window === 'undefined') {
-              fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:61',message:'Database connection test failed',data:{retries,error:err?.message,code:err?.code},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+              fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:61',message:'Database connection test failed',data:{retries,error:err?.message,code:err?.code,isTimeout},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
             }
             // #endregion
             if (retries > 0) {
               console.warn(`Database connection test failed, retrying... (${retries} attempts left)`, err?.message || err);
+              // Reset pool on timeout to force reconnection
+              // DON'T call pool.end() - it will destroy the pool while other queries might be using it
+              // Just set to null and let getPool() create a new one
+              // The old pool will be garbage collected when no longer referenced
+              if (isTimeout && pool) {
+                pool = null;
+              }
               await new Promise(resolve => setTimeout(resolve, 3000)); // Increase delay
             } else {
               console.error('Database connection error after retries:', err?.message || err);
@@ -98,7 +129,71 @@ export function getPool(): Pool | null {
   return pool;
 }
 
-export type NewsRegionTable = 'indonesia' | 'china' | 'japan' | 'korea' | 'international';
+/**
+ * Execute a database query with retry logic and timeout handling
+ * Helps prevent ETIMEDOUT errors by retrying failed queries
+ */
+async function executeQueryWithRetry<T = any>(
+  queryFn: () => Promise<{ rows: T[] }>,
+  retries: number = 3,
+  delay: number = 2000
+): Promise<{ rows: T[] } | null> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      // Ensure we have a valid pool before executing query
+      const currentPool = getPool();
+      if (!currentPool) {
+        console.warn(`⚠️ No database pool available (attempt ${attempt}/${retries})`);
+        if (attempt < retries) {
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        return null;
+      }
+      
+      const result = await Promise.race([
+        queryFn(),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Query timeout')), 25000) // 25 second timeout
+        )
+      ]);
+      return result;
+    } catch (error: any) {
+      // Check for timeout errors (including AggregateError with nested errors)
+      const isTimeout = error?.code === 'ETIMEDOUT' || 
+                       error?.message?.includes('timeout') ||
+                       error?.message === 'Query timeout' ||
+                       error?.name === 'AggregateError' ||
+                       (error?.errors && Array.isArray(error.errors) && error.errors.some((e: any) => 
+                         e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout')
+                       ));
+      
+      if (isTimeout && attempt < retries) {
+        console.warn(`⚠️ Database query timeout (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        // Reset pool on timeout to force reconnection
+        // DON'T call pool.end() - it will destroy the pool while other queries might be using it
+        // Just set to null and let getPool() create a new one
+        // The old pool will be garbage collected when no longer referenced
+        pool = null;
+        
+        // Recreate pool for next attempt
+        getPool();
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait longer for pool to initialize
+        continue;
+      }
+      
+      // If not timeout or last attempt, throw error
+      if (!isTimeout || attempt === retries) {
+        throw error;
+      }
+    }
+  }
+  
+  return null;
+}
+
+export type NewsRegionTable = 'indonesia' | 'china' | 'japan' | 'kpop' | 'international';
 
 /**
  * Map NewsRegion to table name
@@ -107,8 +202,7 @@ export function getTableName(region: NewsRegion): NewsRegionTable {
   const mapping: Record<NewsRegion, NewsRegionTable> = {
     'id': 'indonesia',
     'cn': 'china',
-    'jp': 'japan',
-    'kr': 'korea',
+    'kr': 'kpop',
     'intl': 'international',
   };
   return mapping[region] || 'international';
@@ -173,12 +267,24 @@ export async function fetchArticlesFromDatabase(
       fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:134',message:'Before fetch query',data:{tableName,region,category,minDateISO},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
     }
     // #endregion
-    const result = await dbPool.query(query, params);
+    
+    // Use executeQueryWithRetry to handle timeouts
+    const result = await executeQueryWithRetry(
+      () => dbPool.query(query, params)
+    );
+    
+    if (!result) {
+      console.warn(`⚠️ Failed to fetch articles from ${tableName} after retries`);
+      return [];
+    }
+    
     // #region agent log
     if (typeof window === 'undefined') {
       fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/database.ts:137',message:'After fetch query',data:{tableName,region,category,rowsReturned:result.rows?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
     }
     // #endregion
+    
+    console.log(`📊 Fetched ${result.rows?.length || 0} articles from ${tableName} (region: ${region}, category: ${category || 'all'})`);
 
     // Transform database rows to Article format
     const articles: Article[] = (result.rows || []).map((row: any) => ({
@@ -395,7 +501,7 @@ export async function deleteAllArticles(): Promise<{ deleted: number; errors: nu
   console.log('🧹 Starting full database cleanup: Deleting ALL articles and resetting ID sequences...');
 
   try {
-    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'korea', 'international'];
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'kpop', 'international'];
 
     for (const table of tables) {
       try {
@@ -404,34 +510,79 @@ export async function deleteAllArticles(): Promise<{ deleted: number; errors: nu
         const countToDelete = parseInt(countResult.rows[0]?.count || '0', 10);
 
         if (countToDelete > 0) {
-          // Delete all articles
-          await dbPool.query(`DELETE FROM ${table}`);
-          console.log(`✅ Deleted ${countToDelete} articles from ${table}`);
-          totalDeleted += countToDelete;
+          // Delete all articles (with retry)
+          const deleteResult = await executeQueryWithRetry(
+            () => dbPool.query(`DELETE FROM ${table}`)
+          );
+          
+          if (deleteResult) {
+            console.log(`✅ Deleted ${countToDelete} articles from ${table}`);
+            totalDeleted += countToDelete;
+          } else {
+            console.error(`❌ Failed to delete articles from ${table} after retries`);
+            totalErrors++;
+          }
         } else {
           console.log(`✓ No articles to delete from ${table}`);
         }
 
-        // Reset sequence to start from 1
+        // Reset sequence to start from 1 (with retry)
         // PostgreSQL sequence name format: {table_name}_id_seq
         try {
-          await dbPool.query(`ALTER SEQUENCE ${table}_id_seq RESTART WITH 1`);
-          console.log(`✅ Reset ID sequence for ${table} to start from 1`);
-        } catch (seqError: any) {
-          console.warn(`⚠️ Could not reset sequence for ${table}:`, seqError?.message || seqError);
-          // Try alternative method if sequence doesn't exist
-          try {
-            const maxIdResult = await dbPool.query(`SELECT MAX(id) as max_id FROM ${table}`);
-            const maxId = maxIdResult.rows[0]?.max_id || 0;
-            if (maxId > 0) {
-              await dbPool.query(`SELECT setval('${table}_id_seq', 1, false)`);
-              console.log(`✅ Reset ID sequence for ${table} using setval`);
-            } else {
-              // No rows, sequence should already be at 1
-              console.log(`✓ Sequence for ${table} already at start (no rows)`);
+          const alterSeqResult = await executeQueryWithRetry(
+            () => dbPool.query(`ALTER SEQUENCE ${table}_id_seq RESTART WITH 1`)
+          );
+          
+          if (alterSeqResult) {
+            console.log(`✅ Reset ID sequence for ${table} to start from 1`);
+          } else {
+            console.warn(`⚠️ Could not reset sequence for ${table} after retries, trying alternative method...`);
+            // Try alternative method if sequence doesn't exist
+            try {
+              const maxIdResult = await executeQueryWithRetry(
+                () => dbPool.query(`SELECT MAX(id) as max_id FROM ${table}`)
+              );
+              
+              if (maxIdResult) {
+                const maxId = maxIdResult.rows[0]?.max_id || 0;
+                if (maxId > 0) {
+                  const setvalResult = await executeQueryWithRetry(
+                    () => dbPool.query(`SELECT setval('${table}_id_seq', 1, false)`)
+                  );
+                  
+                  if (setvalResult) {
+                    console.log(`✅ Reset ID sequence for ${table} using setval`);
+                  } else {
+                    console.warn(`⚠️ Could not reset sequence using setval for ${table} after retries`);
+                  }
+                } else {
+                  // No rows, sequence should already be at 1
+                  console.log(`✓ Sequence for ${table} already at start (no rows)`);
+                }
+              } else {
+                console.warn(`⚠️ Could not get MAX(id) for ${table} after retries`);
+              }
+            } catch (setvalError: any) {
+              const isTimeout = setvalError?.code === 'ETIMEDOUT' || 
+                               setvalError?.message?.includes('timeout') ||
+                               setvalError?.name === 'AggregateError';
+              
+              if (isTimeout) {
+                console.warn(`⚠️ Timeout resetting sequence for ${table}, will retry on next cycle`);
+              } else {
+                console.warn(`⚠️ Could not reset sequence using setval for ${table}:`, setvalError?.message || setvalError);
+              }
             }
-          } catch (setvalError: any) {
-            console.warn(`⚠️ Could not reset sequence using setval for ${table}:`, setvalError?.message || setvalError);
+          }
+        } catch (seqError: any) {
+          const isTimeout = seqError?.code === 'ETIMEDOUT' || 
+                           seqError?.message?.includes('timeout') ||
+                           seqError?.name === 'AggregateError';
+          
+          if (isTimeout) {
+            console.warn(`⚠️ Timeout resetting sequence for ${table}, will retry on next cycle`);
+          } else {
+            console.warn(`⚠️ Could not reset sequence for ${table}:`, seqError?.message || seqError);
           }
         }
       } catch (error: any) {
@@ -457,6 +608,155 @@ export async function deleteAllArticles(): Promise<{ deleted: number; errors: nu
  * Delete articles older than December 9, 2025 (including articles from 2020-2024)
  * This ensures only articles from Dec 9, 2025 onwards are kept
  */
+/**
+ * Delete articles based on region and date range
+ * @param region - NewsRegion or 'all' for all regions
+ * @param dateRange - '1d' (1 day), '7d' (7 days), '1m' (1 month), '1y' (1 year), or 'all' (all articles)
+ */
+export async function deleteArticles(
+  region: NewsRegion | 'all',
+  dateRange: '1d' | '7d' | '1m' | '1y' | 'all' = 'all'
+): Promise<{ deleted: number; errors: number }> {
+  const dbPool = getPool();
+  if (!dbPool) {
+    console.error('❌ Database pool not available for deleteArticles');
+    return { deleted: 0, errors: 1 };
+  }
+
+  let totalDeleted = 0;
+  let totalErrors = 0;
+
+  // Calculate cutoff date based on dateRange
+  // Logic: Delete articles OLDER than X days/months/years (not within X period)
+  // Example: "7d" = delete articles older than 7 days ago (keep articles within last 7 days)
+  let cutoffDate: Date | null = null;
+  if (dateRange !== 'all') {
+    const now = new Date();
+    cutoffDate = new Date(now);
+    
+    switch (dateRange) {
+      case '1d':
+        // Delete articles older than 1 day ago (keep articles from today and yesterday)
+        cutoffDate.setDate(cutoffDate.getDate() - 1);
+        cutoffDate.setHours(0, 0, 0, 0); // Start of day
+        break;
+      case '7d':
+        // Delete articles older than 7 days ago (keep articles from last 7 days)
+        cutoffDate.setDate(cutoffDate.getDate() - 7);
+        cutoffDate.setHours(0, 0, 0, 0); // Start of day
+        break;
+      case '1m':
+        // Delete articles older than 1 month ago (keep articles from last month)
+        cutoffDate.setMonth(cutoffDate.getMonth() - 1);
+        cutoffDate.setHours(0, 0, 0, 0); // Start of day
+        break;
+      case '1y':
+        // Delete articles older than 1 year ago (keep articles from last year)
+        cutoffDate.setFullYear(cutoffDate.getFullYear() - 1);
+        cutoffDate.setHours(0, 0, 0, 0); // Start of day
+        break;
+    }
+  }
+
+  const cutoffDateISO = cutoffDate ? cutoffDate.toISOString() : null;
+  
+  // Log for debugging
+  if (cutoffDate) {
+    console.log(`📅 Delete cutoff date: ${cutoffDate.toISOString()}`);
+    console.log(`   Will delete articles with published_at < ${cutoffDateISO}`);
+    console.log(`   Articles with published_at >= ${cutoffDateISO} will be KEPT`);
+  }
+  const regions: NewsRegion[] = region === 'all' 
+    ? ['id', 'cn', 'kr', 'intl']
+    : [region];
+
+  console.log(`🧹 Starting delete articles: region=${region}, dateRange=${dateRange}`);
+
+  try {
+    for (const reg of regions) {
+      const table = getTableName(reg);
+      
+      try {
+        let query: string;
+        let params: any[];
+
+        // First, count articles to be deleted
+        // Query: published_at < cutoffDate means "older than cutoff date"
+        // This will DELETE articles OLDER than X days/months/years
+        // and KEEP articles WITHIN the last X days/months/years
+        const countQuery = cutoffDateISO 
+          ? `SELECT COUNT(*) as count FROM ${table} WHERE published_at < $1`
+          : `SELECT COUNT(*) as count FROM ${table}`;
+        const countParams = cutoffDateISO ? [cutoffDateISO] : [];
+        
+        const countResult = await executeQueryWithRetry(
+          () => dbPool.query(countQuery, countParams)
+        );
+        
+        if (!countResult) {
+          console.error(`❌ Failed to count articles in ${table} after retries`);
+          totalErrors++;
+          continue;
+        }
+        
+        const countToDelete = parseInt(countResult.rows[0]?.count || '0', 10);
+        
+        if (countToDelete > 0) {
+          // Build delete query
+          let deleteQuery: string;
+          let deleteParams: any[];
+          
+          if (cutoffDateISO) {
+            // Delete articles OLDER than cutoff date (published_at < cutoffDate)
+            // This means: delete articles that are MORE than X days/months/years old
+            // Articles WITHIN the last X days/months/years will be KEPT
+            deleteQuery = `DELETE FROM ${table} WHERE published_at < $1`;
+            deleteParams = [cutoffDateISO];
+            console.log(`   Query: DELETE articles with published_at < ${cutoffDateISO}`);
+            console.log(`   This will DELETE articles OLDER than ${dateRange} and KEEP articles WITHIN last ${dateRange}`);
+          } else {
+            // Delete all articles
+            deleteQuery = `DELETE FROM ${table}`;
+            deleteParams = [];
+          }
+          
+          // Delete articles
+          const deleteResult = await executeQueryWithRetry(
+            () => dbPool.query(deleteQuery, deleteParams)
+          );
+          
+          if (deleteResult) {
+            totalDeleted += countToDelete;
+            console.log(`✅ Deleted ${countToDelete} articles from ${table} (region: ${reg}, dateRange: ${dateRange})`);
+          } else {
+            console.error(`❌ Failed to delete articles from ${table} after retries`);
+            totalErrors++;
+          }
+        } else {
+          console.log(`✓ No articles to delete from ${table} (region: ${reg}, dateRange: ${dateRange})`);
+        }
+      } catch (error: any) {
+        const isTimeout = error?.code === 'ETIMEDOUT' || 
+                         error?.message?.includes('timeout') ||
+                         error?.name === 'AggregateError';
+        
+        if (isTimeout) {
+          console.warn(`⚠️ Timeout deleting articles from ${table}, will retry on next cycle`);
+        } else {
+          console.error(`❌ Error deleting articles from ${table}:`, error?.message || error);
+        }
+        totalErrors++;
+      }
+    }
+
+    console.log(`🧹 Delete complete: ${totalDeleted} articles deleted, ${totalErrors} errors`);
+    return { deleted: totalDeleted, errors: totalErrors };
+  } catch (error: any) {
+    console.error('❌ Error in deleteArticles:', error?.message || error);
+    return { deleted: totalDeleted, errors: totalErrors + 1 };
+  }
+}
+
 export async function deleteOldArticles(): Promise<{ deleted: number; errors: number }> {
   const dbPool = getPool();
   if (!dbPool) {
@@ -475,31 +775,55 @@ export async function deleteOldArticles(): Promise<{ deleted: number; errors: nu
   console.log(`   This will delete articles from 2020, 2021, 2022, 2023, 2024, and before Dec 9, 2025`);
 
   try {
-    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'korea', 'international'];
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'kpop', 'international'];
 
     for (const table of tables) {
       try {
-        // First, count articles to be deleted
-        const countResult = await dbPool.query(
-          `SELECT COUNT(*) as count FROM ${table} WHERE published_at < $1`,
-          [cutoffDateISO]
+        // First, count articles to be deleted (with retry)
+        const countResult = await executeQueryWithRetry(
+          () => dbPool.query(
+            `SELECT COUNT(*) as count FROM ${table} WHERE published_at < $1`,
+            [cutoffDateISO]
+          )
         );
+        
+        if (!countResult) {
+          console.error(`❌ Failed to count articles in ${table} after retries`);
+          totalErrors++;
+          continue;
+        }
+        
         const countToDelete = parseInt(countResult.rows[0]?.count || '0', 10);
 
         if (countToDelete > 0) {
-          // Delete articles older than December 9, 2025
-          const deleteResult = await dbPool.query(
-            `DELETE FROM ${table} WHERE published_at < $1`,
-            [cutoffDateISO]
+          // Delete articles older than December 9, 2025 (with retry)
+          const deleteResult = await executeQueryWithRetry(
+            () => dbPool.query(
+              `DELETE FROM ${table} WHERE published_at < $1`,
+              [cutoffDateISO]
+            )
           );
-
-          console.log(`✅ Deleted ${countToDelete} old articles from ${table} (before December 9, 2025)`);
-          totalDeleted += countToDelete;
+          
+          if (deleteResult) {
+            console.log(`✅ Deleted ${countToDelete} old articles from ${table} (before December 9, 2025)`);
+            totalDeleted += countToDelete;
+          } else {
+            console.error(`❌ Failed to delete articles from ${table} after retries`);
+            totalErrors++;
+          }
         } else {
           console.log(`✓ No old articles to delete from ${table}`);
         }
       } catch (error: any) {
-        console.error(`❌ Error processing ${table}:`, error?.message || error);
+        const isTimeout = error?.code === 'ETIMEDOUT' || 
+                         error?.message?.includes('timeout') ||
+                         error?.name === 'AggregateError';
+        
+        if (isTimeout) {
+          console.warn(`⚠️ Timeout processing ${table}, will retry on next cycle:`, error?.message || error);
+        } else {
+          console.error(`❌ Error processing ${table}:`, error?.message || error);
+        }
         totalErrors++;
       }
     }
@@ -549,14 +873,25 @@ export async function cleanupInvalidArticles(): Promise<{ deleted: number; error
   console.log(`   4. source_url must return 200 OK (not 404, timeout, or error)`);
 
   try {
-    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'korea', 'international'];
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'kpop', 'international'];
 
     for (const table of tables) {
       try {
-        // Get all articles from this table
-        const allArticles = await dbPool.query(`SELECT id, title, source_url, published_at FROM ${table}`);
+        // Get all articles from this table (with retry)
+        const allArticlesResult = await executeQueryWithRetry(
+          () => dbPool.query(`SELECT id, title, source_url, published_at FROM ${table}`)
+        );
         
-        for (const article of allArticles.rows) {
+        if (!allArticlesResult) {
+          console.error(`❌ Failed to fetch articles from ${table} after retries`);
+          totalErrors++;
+          continue;
+        }
+        
+        const allArticles = allArticlesResult.rows;
+        console.log(`📊 Processing ${allArticles.length} articles from ${table}...`);
+        
+        for (const article of allArticles) {
           let shouldDelete = false;
           let deleteReason = '';
 
@@ -644,9 +979,17 @@ export async function cleanupInvalidArticles(): Promise<{ deleted: number; error
           // Delete if invalid
           if (shouldDelete) {
             try {
-              await dbPool.query(`DELETE FROM ${table} WHERE id = $1`, [article.id]);
-              totalDeleted++;
-              console.log(`   ❌ Deleted invalid article: ${article.title?.substring(0, 50)}... (${deleteReason})`);
+              const deleteResult = await executeQueryWithRetry(
+                () => dbPool.query(`DELETE FROM ${table} WHERE id = $1`, [article.id])
+              );
+              
+              if (deleteResult) {
+                totalDeleted++;
+                console.log(`   ❌ Deleted invalid article: ${article.title?.substring(0, 50)}... (${deleteReason})`);
+              } else {
+                console.error(`   ❌ Failed to delete article ${article.id} after retries`);
+                totalErrors++;
+              }
             } catch (deleteError: any) {
               console.error(`   ❌ Error deleting article ${article.id}:`, deleteError?.message);
               totalErrors++;
@@ -654,7 +997,18 @@ export async function cleanupInvalidArticles(): Promise<{ deleted: number; error
           }
         }
       } catch (error: any) {
-        console.error(`❌ Error processing ${table}:`, error?.message || error);
+        const isTimeout = error?.code === 'ETIMEDOUT' || 
+                         error?.message?.includes('timeout') ||
+                         error?.name === 'AggregateError' ||
+                         (error?.errors && Array.isArray(error.errors) && error.errors.some((e: any) => 
+                           e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout')
+                         ));
+        
+        if (isTimeout) {
+          console.warn(`⚠️ Timeout processing ${table} in cleanupInvalidArticles, will retry on next cycle:`, error?.message || error);
+        } else {
+          console.error(`❌ Error processing ${table}:`, error?.message || error);
+        }
         totalErrors++;
       }
     }

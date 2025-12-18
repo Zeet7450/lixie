@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Article } from '@/types';
 
 interface ArticlesStore {
@@ -10,9 +11,11 @@ interface ArticlesStore {
   isBookmarked: (articleId: number) => boolean;
 }
 
-export const useArticlesStore = create<ArticlesStore>((set, get) => ({
-  articles: [],
-  bookmarks: [],
+export const useArticlesStore = create<ArticlesStore>()(
+  persist(
+    (set, get) => ({
+      articles: [],
+      bookmarks: [],
   setArticles: (articles) => {
     // Clear existing articles first
     set({ articles: [] });
@@ -38,10 +41,17 @@ export const useArticlesStore = create<ArticlesStore>((set, get) => ({
       set({ bookmarks });
     }
   },
-  removeBookmark: (articleId) => {
-    const bookmarks = get().bookmarks.filter(id => id !== articleId);
-    set({ bookmarks });
-  },
-  isBookmarked: (articleId) => get().bookmarks.includes(articleId),
-}));
+      removeBookmark: (articleId) => {
+        const bookmarks = get().bookmarks.filter(id => id !== articleId);
+        set({ bookmarks });
+      },
+      isBookmarked: (articleId) => get().bookmarks.includes(articleId),
+    }),
+    {
+      name: 'lixie-articles-storage',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ bookmarks: state.bookmarks }), // Only persist bookmarks, not articles
+    }
+  )
+);
 

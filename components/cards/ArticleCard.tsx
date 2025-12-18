@@ -16,20 +16,19 @@ interface ArticleCardProps {
 export function ArticleCard({ article, index = 0 }: ArticleCardProps) {
   const { config, getTransition } = useAnimation();
   const [isHovering, setIsHovering] = useState(false);
-  const { addClick, addReading } = useAnalyticsStore();
-
-  const handleClick = () => {
-    // Track article click
-    addClick(article.id);
-  };
+  const { addReading } = useAnalyticsStore();
 
   const handleArticleView = () => {
-    // Track article reading when user views the article
-    addReading(article.id, article.category);
+    // Track article reading when user views the article (unique reads only)
+    // addReading will check if article already read
+    addReading(article.id, article.category || 'other');
   };
 
   return (
-    <Link href={`/article/${article.id}`} onClick={handleClick}>
+    <Link 
+      href={`/article/${article.id}`} 
+      prefetch={false}
+    >
       <motion.article
         onViewportEnter={handleArticleView}
         initial={{
@@ -57,129 +56,51 @@ export function ArticleCard({ article, index = 0 }: ArticleCardProps) {
         className="glass rounded-glass overflow-hidden cursor-pointer group relative w-full"
         data-article-card={article.id}
       >
-        {/* ARTICLE IMAGE - Only show if image exists */}
-        {(article.image_url || article.preview_image_url) && (
+        {/* BADGES - Always show at top */}
+        <div className="relative pt-3 px-3 sm:px-4">
+          {/* HOT NEWS BADGE */}
+          {article.is_breaking && (
+            <motion.div
+              initial={{ scale: 0, rotate: -20 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{
+                type: 'spring',
+                stiffness: 300,
+                damping: 15,
+              }}
+              className="inline-block mb-2"
+            >
+              <motion.div
+                animate={{
+                  scale: [1, 1.15, 1],
+                  opacity: [1, 0.85, 1],
+                }}
+                transition={{
+                  duration: 2,
+                  repeat: Infinity,
+                  ease: 'easeInOut',
+                }}
+                className="bg-red-500 text-white px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1"
+              >
+                <span>🔥</span>
+                <span>HOT</span>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {/* CATEGORY BADGE */}
           <motion.div
-            className="relative h-48 overflow-hidden bg-gradient-to-br from-lavender-200 to-rose-200"
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+              ...config.Transitions.standard,
+              delay: index * 0.05 + 0.05,
+            } as any}
+            className="inline-block ml-2 bg-white/80 dark:bg-black/60 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold"
           >
-            <motion.img
-              src={article.image_url || article.preview_image_url || ''}
-              alt={article.title}
-              className="w-full h-full object-cover"
-              animate={{
-                scale: isHovering ? 1.05 : 1,
-              }}
-              transition={config.Transitions.standard as any}
-              onError={(e) => {
-                // Fallback to preview_image_url if image_url fails
-                const target = e.target as HTMLImageElement;
-                if (article.preview_image_url && target.src !== article.preview_image_url) {
-                  target.src = article.preview_image_url;
-                } else {
-                  // Hide image container if both URLs fail
-                  const container = target.closest('.relative');
-                  if (container) {
-                    (container as HTMLElement).style.display = 'none';
-                  }
-                }
-              }}
-            />
-
-            {/* GRADIENT OVERLAY */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-
-            {/* HOT NEWS BADGE */}
-            {article.is_breaking && (
-              <motion.div
-                initial={{ scale: 0, rotate: -20 }}
-                animate={{ scale: 1, rotate: 0 }}
-                transition={{
-                  type: 'spring',
-                  stiffness: 300,
-                  damping: 15,
-                }}
-                className="absolute top-3 left-3"
-              >
-                <motion.div
-                  animate={{
-                    scale: [1, 1.15, 1],
-                    opacity: [1, 0.85, 1],
-                  }}
-                  transition={{
-                    duration: 2,
-                    repeat: Infinity,
-                    ease: 'easeInOut',
-                  }}
-                  className="bg-red-500 text-white px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1"
-                >
-                  <span>🔥</span>
-                  <span>HOT</span>
-                </motion.div>
-              </motion.div>
-            )}
-
-            {/* CATEGORY BADGE */}
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                ...config.Transitions.standard,
-                delay: index * 0.05 + 0.05,
-              } as any}
-              className="absolute top-3 right-3 bg-white/80 dark:bg-black/60 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold"
-            >
-              {article.category}
-            </motion.div>
+            {article.category}
           </motion.div>
-        )}
-
-        {/* BADGES - Show outside image container if no image */}
-        {!(article.image_url || article.preview_image_url) && (
-          <div className="relative pt-3 px-3 sm:px-4">
-            {/* HOT NEWS BADGE */}
-            {article.is_breaking && (
-              <motion.div
-                initial={{ scale: 0, rotate: -20 }}
-                animate={{ scale: 1, rotate: 0 }}
-                transition={{
-                  type: 'spring',
-                  stiffness: 300,
-                  damping: 15,
-                }}
-                className="inline-block mb-2"
-              >
-                <motion.div
-                  animate={{
-                    scale: [1, 1.15, 1],
-                    opacity: [1, 0.85, 1],
-                  }}
-                  transition={{
-                    duration: 2,
-                    repeat: Infinity,
-                    ease: 'easeInOut',
-                  }}
-                  className="bg-red-500 text-white px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1"
-                >
-                  <span>🔥</span>
-                  <span>HOT</span>
-                </motion.div>
-              </motion.div>
-            )}
-
-            {/* CATEGORY BADGE */}
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                ...config.Transitions.standard,
-                delay: index * 0.05 + 0.05,
-              } as any}
-              className="inline-block ml-2 bg-white/80 dark:bg-black/60 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold"
-            >
-              {article.category}
-            </motion.div>
-          </div>
-        )}
+        </div>
 
         {/* CARD CONTENT */}
         <motion.div

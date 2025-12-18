@@ -54,14 +54,15 @@ export default function ArticleDetail() {
     loadArticleDetail();
   }, [articleFromStore?.id]);
 
-  // Track article reading when page loads
+  // Track article reading when page loads (only once per article - unique reads)
   useEffect(() => {
-    if (article) {
-      addReading(article.id, article.category);
+    if (article?.id) {
+      // addReading will check if article already read (unique reads only)
+      addReading(article.id, article.category || 'other');
     }
-  }, [article, addReading]);
+  }, [article?.id, addReading]); // Only depend on article.id, not whole article object
 
-  const handleReadFullArticle = async () => {
+  const handleReadFullArticle = () => {
     if (!article?.source_url) {
       alert(language === 'id' 
         ? 'URL artikel tidak tersedia' 
@@ -69,28 +70,27 @@ export default function ArticleDetail() {
       return;
     }
 
-    // Validate URL before opening
-    try {
-      const response = await fetch('/api/test-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: article.source_url }),
-      });
-      
-      const result = await response.json();
-      
-      if (!result.accessible) {
-        alert(language === 'id'
-          ? `URL artikel tidak dapat diakses:\n${article.source_url}\n\nArtikel mungkin telah dihapus atau URL tidak valid.`
-          : `Article URL is not accessible:\n${article.source_url}\n\nThe article may have been removed or the URL is invalid.`);
-        return;
-      }
-    } catch (error) {
-      console.warn('Failed to validate URL, opening anyway:', error);
+    // Validate URL format first
+    let urlToOpen = article.source_url;
+    
+    // Ensure URL has protocol
+    if (!urlToOpen.startsWith('http://') && !urlToOpen.startsWith('https://')) {
+      urlToOpen = 'https://' + urlToOpen;
     }
 
-    // Open URL in new tab
-    window.open(article.source_url, '_blank', 'noopener,noreferrer');
+    // Validate URL format
+    try {
+      new URL(urlToOpen);
+    } catch (error) {
+      alert(language === 'id'
+        ? `URL artikel tidak valid:\n${article.source_url}`
+        : `Invalid article URL:\n${article.source_url}`);
+      return;
+    }
+
+    // Open URL directly in new tab (skip validation check for faster access)
+    // URL validation is already done at database level
+    window.open(urlToOpen, '_blank', 'noopener,noreferrer');
   };
 
   if (loadingDetail && !articleFromStore) {
@@ -138,23 +138,6 @@ export default function ArticleDetail() {
         <ArrowLeft size={20} />
         {language === 'id' ? 'Kembali' : 'Back'}
       </motion.button>
-
-      {/* Preview Image from Source */}
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 0.15 }}
-        className="mb-8"
-      >
-        <img
-          src={article.preview_image_url || article.image_url || 'https://via.placeholder.com/1200x600'}
-          alt={article.title}
-          className="w-full rounded-glass object-cover"
-        />
-        <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2 text-center italic">
-          {language === 'id' ? 'Gambar preview dari' : 'Preview image from'} {article.source_id}
-        </p>
-      </motion.div>
 
       <div className="flex items-start justify-between gap-4 mb-4">
         <motion.h1

@@ -8,7 +8,7 @@ import { translateArticleForRegion } from './article-translator';
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
   (typeof window !== 'undefined' ? '/api' : 'http://localhost:3000/api');
 
-export type NewsRegion = 'id' | 'cn' | 'jp' | 'kr' | 'intl';
+export type NewsRegion = 'id' | 'cn' | 'kr' | 'intl';
 
 export interface ApiResponse<T> {
   data: T;
@@ -88,9 +88,13 @@ export async function fetchArticles(
     
     const url = `${API_BASE_URL}/articles${params.toString() ? `?${params.toString()}` : ''}`;
     
+    console.log(`🔍 Fetching articles from: ${url}`);
+    
     const response = await axios.get<ApiResponse<Article[]>>(url, {
-      timeout: 10000,
+      timeout: 30000, // Increase timeout to 30 seconds
     });
+    
+    console.log(`✅ API Response: success=${response.data.success}, articles=${response.data.data?.length || 0}`);
 
     if (response.data.success && response.data.data) {
       const articles = response.data.data || [];
@@ -620,9 +624,6 @@ function getMockArticles(category?: string, region?: NewsRegion): Article[] {
                articleSource.includes('ecns') || 
                articleSource.includes('chinadaily') ||
                articleSource.includes('ciie');
-      } else if (region === 'jp') {
-        return articleLanguage === 'ja' || 
-               articleSource.includes('reuters') && article.title.includes('Japan');
       } else if (region === 'kr') {
         return articleLanguage === 'ko' || 
                articleSource.includes('ap news') && article.title.includes('South Korea') ||
