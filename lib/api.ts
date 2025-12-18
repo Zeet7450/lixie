@@ -8,7 +8,7 @@ import { translateArticleForRegion } from './article-translator';
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
   (typeof window !== 'undefined' ? '/api' : 'http://localhost:3000/api');
 
-export type NewsRegion = 'id' | 'cn' | 'kr' | 'intl';
+export type NewsRegion = 'id' | 'cn' | 'intl';
 
 export interface ApiResponse<T> {
   data: T;
@@ -68,7 +68,7 @@ export async function fetchArticleDetail(articleId: number): Promise<Article | n
 }
 
 /**
- * Fetch articles from multiple news sources (Indonesia, China, Japan, Korea, International)
+ * Fetch articles from multiple news sources (Indonesia, China, International)
  * System analyzes and aggregates news from various websites
  * Articles are stored in separate tables by region in Neon database
  */
@@ -99,8 +99,10 @@ export async function fetchArticles(
     if (response.data.success && response.data.data) {
       const articles = response.data.data || [];
       
-      // Filter articles to only include from December 9, 2025 onwards
-      const minDate = new Date('2025-12-09T00:00:00.000Z');
+      // Filter articles to only include from last 7 days (rolling window - always current)
+      const minDate = new Date();
+      minDate.setDate(minDate.getDate() - 7); // Last 7 days
+      minDate.setHours(0, 0, 0, 0); // Start of day
       const minDateTime = minDate.getTime();
       const filteredArticles = articles.filter((article: Article) => {
         try {
@@ -138,7 +140,7 @@ export async function fetchArticles(
 
 /**
  * Get mock articles for development/fallback
- * Includes articles from Indonesia, China, Japan, Korea, and International sources
+ * Includes articles from Indonesia, China, and International sources
  */
 function getMockArticles(category?: string, region?: NewsRegion): Article[] {
   const allArticles: Article[] = [
@@ -428,64 +430,6 @@ function getMockArticles(category?: string, region?: NewsRegion): Article[] {
       comments: 189,
       published_at: new Date(Date.now() - 5400000).toISOString(),
     },
-    // KOREA ARTICLES
-    {
-      id: 16,
-      title: 'South Korea to Require Advertisers to Label AI-Generated Ads',
-      description: 'Starting in early 2026, all advertisements created using artificial intelligence must be clearly labeled in South Korea.',
-      summary: 'South Korea announced that starting in early 2026, all advertisements created using artificial intelligence must be clearly labeled. This measure aims to combat deceptive online ads featuring deepfake celebrities or fabricated experts promoting various products. The new regulation is part of South Korea\'s broader efforts to regulate AI technology and protect consumers from misleading content. Advertisers will be required to disclose when AI technology is used to create or modify advertisements, including the use of deepfake technology. This move comes as AI-generated content becomes increasingly sophisticated and difficult to distinguish from real content. The regulation is expected to enhance transparency in advertising and protect consumer rights.',
-      source_url: 'https://apnews.com/article/6df668ae93489da7d448c66e53905bbb',
-      source_id: 'AP News',
-      category: 'technology',
-      language: 'ko',
-      hotness_score: 82,
-      is_breaking: false,
-      is_trending: true,
-      image_url: 'https://images.unsplash.com/photo-1677442136019-21780ecad995?w=800',
-      preview_image_url: 'https://images.unsplash.com/photo-1677442136019-21780ecad995?w=1200',
-      views: 1120,
-      shares: 290,
-      comments: 98,
-      published_at: new Date(Date.now() - 2700000).toISOString(),
-    },
-    {
-      id: 17,
-      title: 'South Korea to Consider Setting Up $3.1 Bln Foundry to Grow Local Chip Sector',
-      description: 'South Korea unveiled plans to establish a 4.5 trillion won semiconductor foundry to bolster the country\'s chip industry.',
-      summary: 'South Korea unveiled plans to establish a 4.5 trillion won ($3.06 billion) semiconductor foundry. This initiative seeks to bolster the country\'s chip industry, particularly in response to the growing global demand for AI chips. The foundry will help South Korea maintain its competitive position in the global semiconductor market and reduce dependence on foreign chip manufacturers. The government plans to provide financial support and regulatory incentives to attract investment in the semiconductor sector. This move comes as countries worldwide are investing heavily in semiconductor manufacturing to secure supply chains and support their technology industries. The foundry is expected to create thousands of jobs and strengthen South Korea\'s position as a leading semiconductor producer.',
-      source_url: 'https://www.reuters.com/world/asia-pacific/south-korea-consider-setting-up-31-bln-foundry-grow-local-chip-sector-2025-12-10',
-      source_id: 'Reuters',
-      category: 'technology',
-      language: 'ko',
-      hotness_score: 87,
-      is_breaking: false,
-      is_trending: true,
-      image_url: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=800',
-      preview_image_url: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200',
-      views: 1380,
-      shares: 360,
-      comments: 145,
-      published_at: new Date(Date.now() - 4500000).toISOString(),
-    },
-    {
-      id: 18,
-      title: 'Aespa Wins Seven Awards at 2024 Melon Music Awards',
-      description: 'Aespa won seven awards including three Daesangs at the 2024 Melon Music Awards held on November 30.',
-      summary: 'The 2024 Melon Music Awards were held on November 30, 2024, with Aespa, IU, and TWS each receiving seven nominations. Aespa emerged as the biggest winner, taking home seven awards including three Daesangs for Song of the Year, Artist of the Year, and Album of the Year. This marks a significant achievement for the K-pop group, solidifying their position as one of the top acts in the Korean music industry. The awards ceremony celebrated the best in Korean music, with performances from top artists and recognition of outstanding achievements in various categories. Despite a decline in physical album sales in 2024, the K-pop industry continues to show strong global influence and digital performance.',
-      source_url: 'https://en.wikipedia.org/wiki/2024_Melon_Music_Awards',
-      source_id: 'Wikipedia',
-      category: 'entertainment',
-      language: 'ko',
-      hotness_score: 79,
-      is_breaking: false,
-      is_trending: true,
-      image_url: 'https://images.unsplash.com/photo-1485846234645-a62644f84728?w=800',
-      preview_image_url: 'https://images.unsplash.com/photo-1485846234645-a62644f84728?w=1200',
-      views: 980,
-      shares: 240,
-      comments: 112,
-      published_at: new Date(Date.now() - 7200000).toISOString(),
-    },
     // JAPAN ARTICLES
     {
       id: 19,
@@ -624,12 +568,6 @@ function getMockArticles(category?: string, region?: NewsRegion): Article[] {
                articleSource.includes('ecns') || 
                articleSource.includes('chinadaily') ||
                articleSource.includes('ciie');
-      } else if (region === 'kr') {
-        return articleLanguage === 'ko' || 
-               articleSource.includes('ap news') && article.title.includes('South Korea') ||
-               article.title.includes('Korea') || 
-               article.title.includes('K-pop') ||
-               article.title.includes('Aespa');
       } else if (region === 'intl') {
         return (articleLanguage === 'en' && 
                 !articleSource.includes('kompas') && 

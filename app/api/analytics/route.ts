@@ -45,7 +45,6 @@ export async function GET(request: Request) {
     const tables: { region: NewsRegion; table: string }[] = [
       { region: 'id', table: 'indonesia' },
       { region: 'cn', table: 'china' },
-      { region: 'kr', table: 'kpop' },
       { region: 'intl', table: 'international' },
     ];
 

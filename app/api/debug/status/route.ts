@@ -59,11 +59,10 @@ export async function GET() {
           }
           
           // Count articles in each table
-          const tables: NewsRegion[] = ['id', 'cn', 'kr', 'intl'];
+          const tables: NewsRegion[] = ['id', 'cn', 'intl'];
           const tableNames = {
             'id': 'indonesia',
             'cn': 'china',
-            'kr': 'korea',
             'intl': 'international',
           };
           

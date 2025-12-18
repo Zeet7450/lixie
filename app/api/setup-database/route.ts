@@ -16,8 +16,6 @@ export async function POST() {
   const tables = [
     { name: 'indonesia', region: 'Indonesia' },
     { name: 'china', region: 'China' },
-    { name: 'japan', region: 'Japan' },
-    { name: 'korea', region: 'Korea' },
     { name: 'international', region: 'International' },
   ];
 

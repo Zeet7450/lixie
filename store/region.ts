@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { NewsRegion } from '@/lib/api';
 
-export type AppRegion = 'id' | 'cn' | 'kr' | 'intl';
+export type AppRegion = 'id' | 'cn' | 'intl';
 
 interface RegionStore {
   region: AppRegion;
@@ -24,7 +24,6 @@ export const useRegionStore = create<RegionStore>()(
         const mapping: Record<AppRegion, NewsRegion> = {
           'id': 'id',
           'cn': 'cn',
-          'kr': 'kr',
           'intl': 'intl',
         };
         return mapping[appRegion];

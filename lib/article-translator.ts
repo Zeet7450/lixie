@@ -24,7 +24,7 @@ export function translateArticleForRegion(
       language: 'id',
     };
   } else {
-    // For other regions (EN/CN/JP/KR), translate to English
+    // For other regions (EN/CN), translate to English
     // In production, this would use a translation service
     // For now, if already in English, return as is
     if (article.language === 'en') {

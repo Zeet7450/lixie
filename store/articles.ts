@@ -20,8 +20,10 @@ export const useArticlesStore = create<ArticlesStore>()(
     // Clear existing articles first
     set({ articles: [] });
     
-    // Filter articles to only include from December 9, 2025 onwards
-    const minDate = new Date('2025-12-09T00:00:00.000Z');
+    // Filter articles to only include from last 7 days (rolling window - always current)
+    const minDate = new Date();
+    minDate.setDate(minDate.getDate() - 7); // Last 7 days
+    minDate.setHours(0, 0, 0, 0); // Start of day
     const minDateTime = minDate.getTime();
     const filtered = articles.filter((article) => {
       try {

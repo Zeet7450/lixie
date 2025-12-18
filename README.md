@@ -1,12 +1,12 @@
 # 🦊 Lixie - Personal News Aggregator PWA
 
-A beautiful, modern Progressive Web App for aggregating global news from 15 verified sources across 5 regions, powered by Groq AI with elegant glass-morphism design and smooth animations.
+A beautiful, modern Progressive Web App for aggregating global news from verified sources across 3 regions, powered by Groq AI with elegant glass-morphism design and smooth animations.
 
 ---
 
 ## ✨ Features
 
-- 🌍 **Global News Sources** - News from 15 verified sources across Indonesia, China, Japan, Korea, and International
+- 🌍 **Global News Sources** - News from verified sources across Indonesia, China, and International
 - 🤖 **AI-Powered Aggregation** - Groq AI analyzes and summarizes news automatically
 - ✨ **Glass-morphism UI** - Modern design with elegant transparency effects
 - 🎬 **Smooth Animations** - Every interaction has delightful animations
@@ -111,17 +111,6 @@ pnpm start
 - **Xinhua (English)** - http://www.xinhuanet.com/english/
 - **China Daily** - https://www.chinadaily.com.cn
 
-### 🇯🇵 Japan (3 sources)
-
-- **NHK World** - https://www3.nhk.or.jp/nhkworld/
-- **The Asahi Shimbun** - https://www.asahi.com
-- **The Japan Times** - https://www.japantimes.co.jp
-
-### 🇰🇷 Korea (2 sources)
-
-- **Yonhap News Agency** - https://en.yna.co.kr
-- **KBS News** - https://news.kbs.co.kr
-
 ### 🌍 International (5 sources)
 
 - **BBC News** - https://www.bbc.com/news
@@ -130,7 +119,7 @@ pnpm start
 - **The Guardian** - https://www.theguardian.com
 - **Al Jazeera English** - https://www.aljazeera.com
 
-**Total: 15 verified news sources**
+**Total: 10 verified news sources**
 
 ---
 
@@ -181,7 +170,7 @@ Automatic news fetching system that processes news from all regions every 25 min
 ### Rate Limiting
 
 - **25 requests per region per 25 minutes** (flexible, can go up to 30)
-- **5 regions**: Indonesia, China, Japan, Korea, International
+- **3 regions**: Indonesia, China, International
 - **Cycle duration**: 25 minutes
 - **Target**: 5-10 articles per region per cycle
 - **Reserve requests**: 20 requests for retries and additional needs
@@ -189,7 +178,7 @@ Automatic news fetching system that processes news from all regions every 25 min
 ### How It Works
 
 1. **Auto-start**: Scheduler starts automatically when web is opened
-2. **Fetch cycle**: Every 25 minutes, fetches news from all regions
+2. **Fetch cycle**: Rotasi setiap 10 menit: id → cn → intl → id (berulang)
 3. **AI processing**: Groq AI analyzes and summarizes articles
 4. **Immediate upload**: Articles uploaded to database immediately after processing
 5. **Error handling**: Automatic retry with reserve requests
@@ -197,13 +186,11 @@ Automatic news fetching system that processes news from all regions every 25 min
 ### Request Distribution
 
 ```
-Per 25 Minutes:
-├── Indonesia: 25 requests (distributed over 25 min)
-├── China: 25 requests
-├── Japan: 25 requests
-├── Korea: 25 requests
-└── International: 25 requests
-Total: 125 requests per cycle
+Per 30 Minutes (1 full cycle):
+├── Indonesia: 10 minutes (10 websites × 1 minute)
+├── China: 10 minutes (10 websites × 1 minute)
+└── International: 10 minutes (10 websites × 1 minute)
+Total cycle: 30 minutes, kembali ke region yang sama setiap 30 menit
 ```
 
 ### Monitoring
@@ -220,15 +207,13 @@ Check scheduler status:
 
 ### Overview
 
-Neon PostgreSQL database with 5 separate tables based on news region.
+Neon PostgreSQL database with 3 separate tables based on news region.
 
 ### Tables
 
 1. **indonesia** - News from Indonesia
 2. **china** - News from China
-3. **japan** - News from Japan
-4. **korea** - News from South Korea
-5. **international** - International news (Europe & America)
+3. **international** - International news (Europe & America)
 
 ### Schema
 
@@ -339,7 +324,7 @@ All animations follow the "Elegant Freshness" philosophy:
 
 ### Region Selector
 
-- **5 Regions**: ID, EN, CN, JP, KR
+- **3 Regions**: ID, CN, INT
 - **Language Auto-switch**: Indonesian for ID, English for others
 - **News Filtering**: Only shows news from selected region
 

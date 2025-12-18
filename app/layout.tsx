@@ -27,6 +27,13 @@ export const viewport: Viewport = {
   viewportFit: 'cover', // For iOS fullscreen
 };
 
+// Auto-start scheduler on server-side
+if (typeof window === 'undefined') {
+  import('@/lib/auto-start-scheduler').catch((error) => {
+    console.error('Failed to load auto-start scheduler:', error);
+  });
+}
+
 export default function RootLayout({
   children,
 }: {

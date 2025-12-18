@@ -193,7 +193,7 @@ async function executeQueryWithRetry<T = any>(
   return null;
 }
 
-export type NewsRegionTable = 'indonesia' | 'china' | 'japan' | 'kpop' | 'international';
+export type NewsRegionTable = 'indonesia' | 'china' | 'international';
 
 /**
  * Map NewsRegion to table name
@@ -202,7 +202,6 @@ export function getTableName(region: NewsRegion): NewsRegionTable {
   const mapping: Record<NewsRegion, NewsRegionTable> = {
     'id': 'indonesia',
     'cn': 'china',
-    'kr': 'kpop',
     'intl': 'international',
   };
   return mapping[region] || 'international';
@@ -235,8 +234,10 @@ export async function fetchArticlesFromDatabase(
     
     const tableName = getTableName(region);
     
-    // Only fetch articles from December 9, 2025 onwards
-    const minDate = new Date('2025-12-09T00:00:00.000Z');
+    // Only fetch articles from last 7 days (rolling window - always current)
+    const minDate = new Date();
+    minDate.setDate(minDate.getDate() - 7); // Last 7 days
+    minDate.setHours(0, 0, 0, 0); // Start of day
     const minDateISO = minDate.toISOString();
 
     let query = `
@@ -501,7 +502,7 @@ export async function deleteAllArticles(): Promise<{ deleted: number; errors: nu
   console.log('🧹 Starting full database cleanup: Deleting ALL articles and resetting ID sequences...');
 
   try {
-    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'kpop', 'international'];
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'international'];
 
     for (const table of tables) {
       try {
@@ -605,7 +606,7 @@ export async function deleteAllArticles(): Promise<{ deleted: number; errors: nu
 }
 
 /**
- * Delete articles older than December 9, 2025 (including articles from 2020-2024)
+ * Delete articles older than last 7 days (rolling window - always current)
  * This ensures only articles from Dec 9, 2025 onwards are kept
  */
 /**
@@ -667,7 +668,7 @@ export async function deleteArticles(
     console.log(`   Articles with published_at >= ${cutoffDateISO} will be KEPT`);
   }
   const regions: NewsRegion[] = region === 'all' 
-    ? ['id', 'cn', 'kr', 'intl']
+    ? ['id', 'cn', 'intl']
     : [region];
 
   console.log(`🧹 Starting delete articles: region=${region}, dateRange=${dateRange}`);
@@ -763,19 +764,21 @@ export async function deleteOldArticles(): Promise<{ deleted: number; errors: nu
     return { deleted: 0, errors: 1 };
   }
 
-  // Delete articles older than December 9, 2025 (including articles from 2020-2024)
-  // This ensures only articles from Dec 9, 2025 onwards are kept
-  const cutoffDate = new Date('2025-12-09T00:00:00.000Z');
+  // Delete articles older than last 7 days (rolling window - always current)
+  // This ensures only articles from last 7 days are kept
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 7); // Last 7 days
+  cutoffDate.setHours(0, 0, 0, 0); // Start of day
   const cutoffDateISO = cutoffDate.toISOString();
   
   let totalDeleted = 0;
   let totalErrors = 0;
 
-  console.log(`🧹 Starting cleanup: Deleting articles older than ${cutoffDateISO} (before December 9, 2025)`);
+    console.log(`🧹 Starting cleanup: Deleting articles older than ${cutoffDateISO} (older than last 7 days)`);
   console.log(`   This will delete articles from 2020, 2021, 2022, 2023, 2024, and before Dec 9, 2025`);
 
   try {
-    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'kpop', 'international'];
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'international'];
 
     for (const table of tables) {
       try {
@@ -796,7 +799,7 @@ export async function deleteOldArticles(): Promise<{ deleted: number; errors: nu
         const countToDelete = parseInt(countResult.rows[0]?.count || '0', 10);
 
         if (countToDelete > 0) {
-          // Delete articles older than December 9, 2025 (with retry)
+          // Delete articles older than last 7 days (with retry)
           const deleteResult = await executeQueryWithRetry(
             () => dbPool.query(
               `DELETE FROM ${table} WHERE published_at < $1`,
@@ -805,7 +808,7 @@ export async function deleteOldArticles(): Promise<{ deleted: number; errors: nu
           );
           
           if (deleteResult) {
-            console.log(`✅ Deleted ${countToDelete} old articles from ${table} (before December 9, 2025)`);
+            console.log(`✅ Deleted ${countToDelete} old articles from ${table} (older than last 7 days)`);
             totalDeleted += countToDelete;
           } else {
             console.error(`❌ Failed to delete articles from ${table} after retries`);
@@ -844,7 +847,7 @@ export async function deleteOldArticles(): Promise<{ deleted: number; errors: nu
 /**
  * Validate and cleanup invalid articles from database
  * Removes articles that:
- * 1. Published before December 9, 2025
+ * 1. Published before last 7 days (rolling window)
  * 2. Have invalid or inaccessible source_url
  * 3. Missing required fields (title, source_url)
  * 4. URLs that are not accessible (404, timeout, etc.)
@@ -855,7 +858,10 @@ export async function cleanupInvalidArticles(): Promise<{ deleted: number; error
     return { deleted: 0, errors: 1, details: { dateInvalid: 0, urlInvalid: 0, missingFields: 0, urlNotAccessible: 0 } };
   }
 
-  const minDate = new Date('2025-12-09T00:00:00.000Z');
+  // Use rolling window: last 7 days (always current)
+  const minDate = new Date();
+  minDate.setDate(minDate.getDate() - 7); // Last 7 days
+  minDate.setHours(0, 0, 0, 0); // Start of day
   const minDateISO = minDate.toISOString();
   
   let totalDeleted = 0;
@@ -867,13 +873,13 @@ export async function cleanupInvalidArticles(): Promise<{ deleted: number; error
 
   console.log(`🧹 Starting validation cleanup: Checking all articles for validity...`);
   console.log(`   Criteria:`);
-  console.log(`   1. Published date must be >= December 9, 2025`);
+    console.log(`   1. Published date must be >= last 7 days (rolling window)`);
   console.log(`   2. source_url must be valid and accessible (will test URL accessibility)`);
   console.log(`   3. Must have title and source_url`);
   console.log(`   4. source_url must return 200 OK (not 404, timeout, or error)`);
 
   try {
-    const tables: NewsRegionTable[] = ['indonesia', 'china', 'japan', 'kpop', 'international'];
+    const tables: NewsRegionTable[] = ['indonesia', 'china', 'international'];
 
     for (const table of tables) {
       try {
@@ -895,7 +901,7 @@ export async function cleanupInvalidArticles(): Promise<{ deleted: number; error
           let shouldDelete = false;
           let deleteReason = '';
 
-          // Check 1: Published date must be >= December 9, 2025
+          // Check 1: Published date must be >= last 7 days (rolling window)
           if (!article.published_at) {
             shouldDelete = true;
             deleteReason = 'missing published_at';
@@ -934,8 +940,6 @@ export async function cleanupInvalidArticles(): Promise<{ deleted: number; error
                 'kompas.com', 'detik.com', 'cnnindonesia.com', 'tempo.co', 'antaranews.com',
                 'thejakartapost.com', 'bisnis.com', 'katadata.co.id', 'tvri.go.id', 'republika.co.id',
                 'xinhuanet.com', 'chinadaily.com.cn', 'ecns.cn', 'people.com.cn',
-                'nhk.or.jp', 'asahi.com', 'japantimes.co.jp', 'mainichi.jp',
-                'yna.co.kr', 'kbs.co.kr', 'chosun.com', 'joongang.co.kr',
                 'bbc.com', 'reuters.com', 'apnews.com', 'theguardian.com', 'aljazeera.com', 'cnn.com',
               ];
               

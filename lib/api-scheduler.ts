@@ -55,15 +55,16 @@ if (typeof window === 'undefined') {
 // - 1 web = 1 menit untuk eksplorasi
 // - 10 web per region = 10 menit total eksplorasi
 // - Setelah semua web dikunjungi, masuk ke analisis (Groq layer 2/3)
-// - Rotasi region setiap 10 menit: id → cn → kr → intl → id (berulang)
-// - Setiap region di-fetch setiap 40 menit (4 region × 10 menit)
+// - Rotasi region setiap 10 menit: id → cn → intl → id (berulang)
+// - Setiap region di-fetch setiap 30 menit (3 region × 10 menit)
+// - Total cycle: 30 menit, kembali ke region yang sama setiap 30 menit
 const RATE_LIMIT = {
   PER_MINUTE: 30, // Groq limit: 30 requests per minute
   WEBSITES_PER_REGION: 10, // 10 websites per region
   EXPLORATION_TIME_PER_WEB: 1 * 60 * 1000, // 1 menit per web untuk eksplorasi
   REGION_CYCLE_DURATION: 10 * 60 * 1000, // 10 menit per region (10 web × 1 menit)
-  REGIONS: ['id', 'cn', 'kr', 'intl'] as NewsRegion[],
-  TOTAL_REGIONS: 4,
+  REGIONS: ['id', 'cn', 'intl'] as NewsRegion[],
+  TOTAL_REGIONS: 3,
   REGION_ROTATION_INTERVAL: 10 * 60 * 1000, // 10 menit per region (rotasi)
   RESERVE_REQUESTS: 20, // Reserve for retries
   TARGET_ARTICLES_PER_REGION: 10, // Target 10 articles per region (1 per website)
@@ -111,7 +112,10 @@ class APIScheduler {
    * Fetches news from each region on a schedule
    */
   async start() {
-    if (this.isRunning) return;
+    if (this.isRunning) {
+      console.log('⚠️ API Scheduler is already running, skipping start');
+      return;
+    }
     
     // Re-check API key at runtime (in case env vars loaded after module init)
     const runtimeKey = getGroqApiKey();
@@ -130,7 +134,8 @@ class APIScheduler {
       console.error('   2. Add either NEXT_PUBLIC_GROQ_API_KEY=your_key OR GROQ_API_KEY=your_key (no quotes, no spaces)');
       console.error('   3. Dev server was restarted after adding env variable');
       console.error('   4. Check: cat .env.local | grep GROQ');
-      return;
+      // Don't return - allow scheduler to start even without key (will fail gracefully)
+      // This allows the scheduler to be monitored and restarted when key is added
     }
     
     // Re-initialize client with runtime key if needed
@@ -181,15 +186,8 @@ class APIScheduler {
     
     console.log(`\n${'='.repeat(60)}`);
     console.log(`🔄 API Scheduler: Rotasi region ke ${currentRegion.toUpperCase()} (${this.currentRegionIndex + 1}/${RATE_LIMIT.TOTAL_REGIONS})`);
-    console.log(`   Setiap region akan di-fetch setiap ${RATE_LIMIT.TOTAL_REGIONS * 10} menit (40 menit)`);
+    console.log(`   Setiap region akan di-fetch setiap ${RATE_LIMIT.TOTAL_REGIONS * 10} menit (30 menit)`);
     console.log(`   Phase: Eksplorasi 10 web (1 menit per web) → Analisis dengan Groq`);
-    
-    // Special logging for Korea region
-    if (currentRegion === 'kr') {
-      console.log(`\n🇰🇷 KOREA REGION DETECTED - Starting fetch process...`);
-      console.log(`   Korea sources: ${this.getNewsSources('kr').length} websites configured`);
-      console.log(`   Sources: ${this.getNewsSources('kr').map(s => s.name).join(', ')}`);
-    }
     console.log(`${'='.repeat(60)}\n`);
     
     // Reset exploration progress untuk region ini
@@ -217,6 +215,11 @@ class APIScheduler {
         this.scheduleNextCycle();
       } else {
         console.warn(`⚠️ Region rotation timeout triggered but scheduler is not running`);
+        // Auto-restart scheduler if it stopped
+        console.log(`🔄 Attempting to auto-restart scheduler...`);
+        this.start().catch((error) => {
+          console.error(`❌ Failed to auto-restart scheduler:`, error);
+        });
       }
     }, RATE_LIMIT.REGION_ROTATION_INTERVAL); // 10 menit
     
@@ -224,7 +227,7 @@ class APIScheduler {
     deleteOldArticles()
       .then((result) => {
         if (result.deleted > 0) {
-          console.log(`🧹 Cleaned up ${result.deleted} old articles (before December 9, 2025) from database`);
+          console.log(`🧹 Cleaned up ${result.deleted} old articles (older than last 7 days) from database`);
         }
         if (result.errors > 0) {
           console.warn(`⚠️ ${result.errors} errors occurred during cleanup`);
@@ -317,11 +320,6 @@ class APIScheduler {
     const totalWebsites = regionSources.length;
     console.log(`🔍 [${region}] Exploring website ${webIndex + 1}/${totalWebsites}: ${source.name} (${source.url})...`);
     
-    // Special logging for Korea
-    if (region === 'kr') {
-      console.log(`   🇰🇷 KOREA: Visiting ${source.name}...`);
-    }
-    
     try {
       // ACTUALLY VISIT the website and collect article URLs
       const collectedUrls = await this.visitWebsiteAndCollectUrls(source.url, source.name);
@@ -340,27 +338,11 @@ class APIScheduler {
         this.collectedArticleUrls.set(region, [...existingUrls, ...newUrls]);
         console.log(`   ✓ Found ${collectedUrls.length} article URL(s) from ${source.name}`);
         console.log(`   📋 Total collected URLs for ${region}: ${this.collectedArticleUrls.get(region)?.length || 0}`);
-        
-        // Special logging for Korea
-        if (region === 'kr') {
-          console.log(`   🇰🇷 KOREA: Successfully collected ${collectedUrls.length} URL(s) from ${source.name}`);
-        }
       } else {
         console.warn(`   ⚠️ No article URLs found from ${source.name}`);
-        
-        // Special logging for Korea
-        if (region === 'kr') {
-          console.warn(`   🇰🇷 KOREA: WARNING - No URLs collected from ${source.name}!`);
-        }
       }
     } catch (error: any) {
       console.error(`   ❌ Error exploring ${source.name}:`, error?.message || error);
-      
-      // Special logging for Korea
-      if (region === 'kr') {
-        console.error(`   🇰🇷 KOREA: ERROR exploring ${source.name} - ${error?.message || 'Unknown error'}`);
-        console.error(`   This may prevent Korea news from being fetched!`);
-      }
     }
     
     // Update progress
@@ -536,14 +518,16 @@ class APIScheduler {
   private async startAnalysisPhase(region: NewsRegion) {
     const progress = this.webExplorationProgress.get(region) || 0;
     const collectedUrls = this.collectedArticleUrls.get(region) || [];
+    const sources = this.getNewsSources(region);
+    const totalWebsites = sources.length; // Use actual number of websites for this region
     
-    if (progress < RATE_LIMIT.WEBSITES_PER_REGION) {
-      console.warn(`⚠️ [${region}] Analysis phase triggered but only ${progress}/${RATE_LIMIT.WEBSITES_PER_REGION} websites explored`);
-      // Wait a bit more or proceed anyway
+    if (progress < totalWebsites) {
+      console.warn(`⚠️ [${region}] Analysis phase triggered but only ${progress}/${totalWebsites} websites explored`);
+      console.warn(`   Proceeding anyway...`);
     }
     
     console.log(`📊 [${region}] Starting analysis phase (Groq layer 2/3)...`);
-    console.log(`   All ${RATE_LIMIT.WEBSITES_PER_REGION} websites have been explored`);
+    console.log(`   ${progress}/${totalWebsites} websites explored`);
     console.log(`   Collected ${collectedUrls.length} article URL(s) from exploration phase`);
     
     if (collectedUrls.length === 0) {
@@ -632,15 +616,6 @@ class APIScheduler {
       console.log(`\n${'='.repeat(60)}`);
       console.log(`🔄 Starting fetch for region ${region.toUpperCase()}...`);
       
-      // Special logging for Korea
-      if (region === 'kr') {
-        console.log(`🇰🇷 KOREA REGION: Starting Groq API call...`);
-        const collectedUrls = this.collectedArticleUrls.get(region) || [];
-        console.log(`   Collected URLs: ${collectedUrls.length} URLs from web exploration`);
-        if (collectedUrls.length > 0) {
-          console.log(`   Sample URLs: ${collectedUrls.slice(0, 3).map(u => u.url).join(', ')}`);
-        }
-      }
       console.log(`${'='.repeat(60)}\n`);
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/api-scheduler.ts:253',message:'Starting fetchNewsWithGroq',data:{region,requestCount:count+1},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
@@ -651,6 +626,7 @@ class APIScheduler {
       fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/api-scheduler.ts:256',message:'fetchNewsWithGroq completed',data:{region,articlesCount:articles.length,articleTitles:articles.slice(0,3).map((a: Article) => a.title?.substring(0,50))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
       // #endregion
 
+      // Always process articles, even if empty (to ensure cycle continues)
       if (articles.length > 0) {
         // Save to database IMMEDIATELY after processing (upload langsung)
         let savedCount = 0;
@@ -725,30 +701,11 @@ class APIScheduler {
       } else {
         console.log(`⚠️ No articles fetched for region ${region} - Groq API returned empty array`);
         
-        // Special logging for Korea
-        if (region === 'kr') {
-          console.error(`\n🇰🇷 KOREA REGION: No articles returned!`);
-          console.error(`   This could indicate:`);
-          console.error(`   1. All collected URLs were invalid or inaccessible`);
-          console.error(`   2. Groq API returned empty response`);
-          console.error(`   3. All articles were filtered out (date validation, etc.)`);
-          const collectedUrls = this.collectedArticleUrls.get(region) || [];
-          console.error(`   Collected URLs count: ${collectedUrls.length}`);
-          console.error(`   Validated URLs count: ${collectedUrls.filter(u => u.isValidated).length}`);
-        }
       }
     } catch (error: any) {
       console.error(`\n${'='.repeat(60)}`);
       console.error(`❌ Error fetching news for region ${region.toUpperCase()}:`, error);
       
-      // Special logging for Korea
-      if (region === 'kr') {
-        console.error(`\n🇰🇷 KOREA REGION ERROR DETECTED!`);
-        console.error(`   Error message: ${error?.message || 'Unknown error'}`);
-        console.error(`   Error code: ${error?.code || 'N/A'}`);
-        console.error(`   Error status: ${error?.status || 'N/A'}`);
-        console.error(`   This is preventing Korea news from being fetched!`);
-      }
       console.error(`${'='.repeat(60)}\n`);
       
       // #region agent log
@@ -777,6 +734,10 @@ class APIScheduler {
           console.log(`Queued failed request for region ${region} for next cycle`);
         }
       }
+      
+      // IMPORTANT: Don't stop scheduler on error - continue with next region
+      // The scheduler should keep running even if one region fails
+      console.log(`⚠️ Error handled for region ${region}, scheduler will continue with next region`);
     }
   }
 
@@ -784,7 +745,7 @@ class APIScheduler {
    * Fetch news using Groq AI to analyze and summarize
    * Uses model combination logic: llama-3.3-70b-versatile (utama) -> llama-3.1-8b-instant (cadangan)
    */
-  private async fetchNewsWithGroq(region: NewsRegion): Promise<Article[]> {
+  public async fetchNewsWithGroq(region: NewsRegion): Promise<Article[]> {
     // Get API key at runtime
     const runtimeKey = getGroqApiKey();
     
@@ -838,6 +799,23 @@ class APIScheduler {
       
       const targetLanguage = region === 'id' ? 'Indonesian' : 'English';
       
+      // Calculate date range: only articles from last 7 days (dynamic, always current)
+      // MUST be declared BEFORE used in collectedUrlsSection
+      const today = new Date();
+      const minDate = new Date();
+      minDate.setDate(minDate.getDate() - 7); // Last 7 days
+      minDate.setHours(0, 0, 0, 0); // Start of day
+      const minDateStr = minDate.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+      const todayDateStr = today.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+      
       // Build sources list with URLs and categories
       const sourcesList = sources.map(s => 
         `- ${s.name} (${s.url}) - Categories: ${s.categories.join(', ')}`
@@ -872,32 +850,13 @@ You MUST:
 2. Read the complete article content
 3. Extract accurate information from the actual article pages
 4. Use the EXACT URL provided (do not modify or construct new URLs)
-5. Verify the publish date is from December 9, 2025 onwards
+5. Verify the publish date is from the last 7 days (${minDateStr} onwards)
 6. Extract real images, titles, and summaries from the actual article pages
 
-If a URL is not accessible or the article is not from December 9, 2025 onwards, skip it and use the source website to find a valid article instead.`;
+If a URL is not accessible or the article is not from the last 7 days (${minDateStr} onwards), skip it and use the source website to find a valid article instead.`;
       }
-      
-      // Calculate date range: only articles from December 9, 2025 onwards
-      const minDate = new Date('2025-12-09T00:00:00.000Z');
-      const minDateStr = minDate.toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
-      });
-      const todayDateStr = new Date().toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
-      });
 
-      // Special prompt for Korea region (K-pop focus)
-      const isKoreaRegion = region === 'kr';
-      const regionSpecificInstruction = isKoreaRegion 
-        ? `\n\n🇰🇷 KOREA REGION - K-POP FOCUS:\nThis region is specifically configured for K-POP news only. You MUST:\n- Focus EXCLUSIVELY on K-pop, K-pop idols, K-pop groups, K-pop music, K-pop entertainment news\n- Visit Soompi, Allkpop, and Yonhap News for the latest K-pop updates\n- Prioritize breaking K-pop news, idol activities, comebacks, music releases, concerts, awards, scandals, and entertainment industry news\n- Extract information about K-pop groups, idols, songs, albums, music videos, performances, and related entertainment content\n- Categorize articles as "entertainment" for K-pop related content\n- Ensure all articles are about K-pop, Korean entertainment, or Korean pop culture\n- DO NOT include general Korean news (politics, economy, etc.) - ONLY K-pop and entertainment news\n`
-        : '';
-      
-      const prompt = `You are a news aggregator bot with REAL-TIME web browsing capabilities. Your task is to fetch and analyze the latest trending and breaking news from ${region} region by ACTUALLY VISITING and READING the source websites.${regionSpecificInstruction}
+      const prompt = `You are a news aggregator bot with REAL-TIME web browsing capabilities. Your task is to fetch and analyze the latest trending and breaking news from ${region} region by ACTUALLY VISITING and READING the source websites.
 
 CRITICAL WEB BROWSING REQUIREMENTS:
 1. You MUST use your web browsing tool to actually visit each of these verified news sources:
@@ -920,10 +879,9 @@ ${sourcesList}${collectedUrlsSection}
    - Copy URLs without verifying they work
 
 CRITICAL DATE REQUIREMENT - READ CAREFULLY:
-- ONLY fetch articles published from December 9, 2025 (${minDateStr}) onwards
-- DO NOT fetch articles published before December 9, 2025
-- DO NOT fetch articles from December 8, 2025 or earlier
-- The minimum publish date is December 9, 2025 00:00:00 UTC
+- ONLY fetch articles published from the last 7 days (${minDateStr} onwards)
+- DO NOT fetch articles published before ${minDateStr}
+- The minimum publish date is ${minDateStr} 00:00:00 UTC (last 7 days, always current)
 - Prioritize the most recent articles (published today first, then recent days)
 - Ensure articles are fresh and current (from ${minDateStr} to ${todayDateStr})
 
@@ -932,7 +890,7 @@ ${validatedUrls.length > 0 ? `PRIORITY: Use the COLLECTED ARTICLE URLs provided 
    a. Open the URL directly in your browser (the URL is already provided above)
    b. Wait for the page to fully load
    c. Read the COMPLETE article content (scroll through the entire article)
-   d. Verify the publish date is from December 9, 2025 onwards
+   d. Verify the publish date is from the last 7 days (${minDateStr} onwards)
    e. Extract information directly from the actual article page
    f. Use the EXACT URL provided (do not modify it)
    
@@ -941,7 +899,7 @@ If a collected URL is not accessible or the article is too old, then proceed to 
 ` : ''}1. For EACH of the 10 sources listed above${validatedUrls.length > 0 ? ' (or use collected URLs if provided)' : ''}, you MUST:
    a. Open your web browser and visit the website URL (e.g., https://www.kompas.com)
    b. Navigate to their latest news section or homepage using the website's navigation
-   c. Browse through the articles and find ones published from December 9, 2025 onwards
+   c. Browse through the articles and find ones published from the last 7 days (${minDateStr} onwards)
    d. CLICK on the article link to open the FULL article page in your browser
    e. Wait for the page to fully load
    f. Read the COMPLETE article content (scroll through the entire article)
@@ -957,13 +915,13 @@ If a collected URL is not accessible or the article is too old, then proceed to 
    - The article URL in the address bar is the EXACT URL you will include (copy it exactly, do NOT construct it)
    - The URL does NOT contain patterns like /view.php?ud=, /view.php?id=, or similar invalid patterns
    - The URL looks like a real article URL (contains /news/, /article/, /berita/, /story/, or date pattern)
-   - The publish date is visible on the article page and is from December 9, 2025 onwards
+   - The publish date is visible on the article page and is from the last 7 days (${minDateStr} onwards)
    - The article content exists and is complete (you can read the full article text)
    - The article image exists on the page (you can see it in the browser)
    - The URL works when you refresh or visit it directly (test it!)
 
 3. Select articles that are:
-   - Published from December 9, 2025 (${minDateStr}) onwards to ${todayDateStr}
+   - Published from the last 7 days (${minDateStr}) onwards to ${todayDateStr}
    - Trending, breaking, or highly relevant
    - From ALL categories to ensure comprehensive coverage
    - REAL articles that exist on the website (not made up or fictional)
@@ -975,21 +933,17 @@ If a collected URL is not accessible or the article is too old, then proceed to 
    - Extract the REAL image URL from the article page (check og:image, main image, or article content)
    - Copy the EXACT article URL (test it to make sure it works)
 
-5. ${isKoreaRegion 
-  ? 'For KOREA region: Focus EXCLUSIVELY on K-pop and entertainment news. Categories should be primarily "entertainment" for K-pop content. Include news about K-pop groups, idols, music releases, concerts, awards, entertainment industry, and Korean pop culture.'
-  : 'Ensure you get articles from ALL categories: technology, politics, economy, business, entertainment, sports, health, science, education, environment (including natural disasters, climate change, environmental issues), travel, food, fashion, automotive, real-estate, history'}
+5. Ensure you get articles from ALL categories: technology, politics, economy, business, entertainment, sports, health, science, education, environment (including natural disasters, climate change, environmental issues), travel, food, fashion, automotive, real-estate, history
 
-6. ${isKoreaRegion 
-  ? 'PRIORITIZE K-pop breaking news: Include latest K-pop comebacks, idol activities, music releases, concerts, awards shows, entertainment industry news, and trending K-pop topics.'
-  : 'PRIORITIZE environment/disaster news: Include natural disasters, climate events, environmental emergencies from each region when available'}
+6. PRIORITIZE environment/disaster news: Include natural disasters, climate events, environmental emergencies from each region when available
 
 7. VERIFICATION: Before including an article, verify:
    - The URL actually exists and is accessible (you can visit it)
-   - The publish date is clearly visible and is from December 9, 2025 onwards
+   - The publish date is clearly visible and is from the last 7 days (${minDateStr} onwards)
    - The article has real content (not just a placeholder or error page)
    - The image URL is real and from the source website
 
-Return a JSON object with an "articles" array containing exactly 1 article per source (${sources.length} articles total for ${sources.length} sources${isKoreaRegion ? ' - ALL MUST BE K-POP RELATED' : ''}, prioritize quality, ensure articles are from ${minDateStr} (December 9, 2025) onwards). Each article must have:
+Return a JSON object with an "articles" array containing exactly 1 article per source (${sources.length} articles total for ${sources.length} sources, prioritize quality, ensure articles are from the last 7 days (${minDateStr} onwards)). Each article must have:
 - title: EXACT title from source website (do NOT translate or modify, preserve original language)
 - description: Brief 1-2 sentence description in ${targetLanguage}
 - summary: Comprehensive and detailed 2-paragraph summary in ${targetLanguage}. Write a clear, well-structured summary that thoroughly covers all main points, key facts, figures, context, and important details from the article. The summary should be informative and complete (exactly 2 paragraphs, not shorter). Each paragraph should be substantial (at least 3-4 sentences) and provide sufficient information so readers can understand the full story without reading the original article. Include specific details, names, dates, numbers, and context where relevant.
@@ -998,7 +952,7 @@ Return a JSON object with an "articles" array containing exactly 1 article per s
 - category: Map to one of these categories: technology, politics, economy, business, entertainment, sports, health, science, education, environment, travel, food, fashion, automotive, real-estate, history. Match the article's category from the source website.
 - image_url: REAL image URL from the article page. Extract from article's main image, og:image meta tag, or article content. MUST be a direct image URL from the source website
 - preview_image_url: Preview image URL (can be same as image_url, but must be from the actual article)
-- published_at: ISO 8601 timestamp (MUST be from December 9, 2025 00:00:00 UTC onwards, extract EXACT publish date from the article page on the source website - this is the date when the article was originally published by the news source, NOT the date when you aggregated it. Format: YYYY-MM-DDTHH:mm:ss.sssZ)
+- published_at: ISO 8601 timestamp (MUST be from the last 7 days (${minDateStr} 00:00:00 UTC onwards), extract EXACT publish date from the article page on the source website - this is the date when the article was originally published by the news source, NOT the date when you aggregated it. Format: YYYY-MM-DDTHH:mm:ss.sssZ)
 - is_breaking: true if marked as breaking/urgent news, false otherwise
 - is_trending: true if trending or highly shared, false otherwise
 - hotness_score: Number 0-100 based on engagement, recency, and importance
@@ -1008,7 +962,7 @@ Return a JSON object with an "articles" array containing exactly 1 article per s
 - comments: Estimated comment count (if available)
 
 CRITICAL REQUIREMENTS:
-1. DATE FILTER: ONLY include articles published from December 9, 2025 00:00:00 UTC (${minDateStr}) onwards. DO NOT include articles from before December 9, 2025. Check the publish date on the article page carefully and exclude any older articles. If an article doesn't have a visible publish date, check the URL, metadata, or article content for date clues.
+1. DATE FILTER: ONLY include articles published from the last 7 days (${minDateStr} 00:00:00 UTC onwards). DO NOT include articles from before ${minDateStr}. Check the publish date on the article page carefully and exclude any older articles. If an article doesn't have a visible publish date, check the URL, metadata, or article content for date clues.
 2. Title: MUST be EXACTLY as shown on the source website. Do NOT translate, modify, or paraphrase titles
 3. Images: image_url and preview_image_url MUST be real image URLs extracted from the article page. Look for:
    - Main article image
@@ -1065,7 +1019,7 @@ CRITICAL REQUIREMENTS:
    - Verify the URL does NOT contain /view.php or similar invalid patterns
    - Test that the URL works by refreshing or visiting it again
 6. Categories: Accurately map the article's category from the source website to the LIXIE category system. Ensure you get articles from ALL categories, especially environment/disaster news.
-7. RECENCY: Prioritize articles published TODAY first, then recent days. Do not include articles older than December 9, 2025. The minimum date is December 9, 2025 00:00:00 UTC.
+7. RECENCY: Prioritize articles published TODAY first, then recent days. Do not include articles older than the last 7 days. The minimum date is ${minDateStr} 00:00:00 UTC (last 7 days, always current).
 8. ENVIRONMENT/DISASTER NEWS: If there are natural disasters, climate events, or environmental emergencies in the region, prioritize these articles and categorize them as "environment".
 
 CRITICAL VERIFICATION REQUIREMENTS (USE YOUR WEB BROWSER):
@@ -1098,14 +1052,14 @@ CRITICAL VERIFICATION CHECKLIST (for each article before including):
 4. ✅ The URL does NOT contain invalid patterns like /view.php?ud=, /view.php?id=, or similar
 5. ✅ The URL looks like a real article URL (contains /news/, /article/, /berita/, /story/, or date pattern)
 6. ✅ You have tested the URL by refreshing or opening it again (it works!)
-7. ✅ The publish date is clearly visible on the page and is from December 9, 2025 onwards
+7. ✅ The publish date is clearly visible on the page and is from the last 7 days (${minDateStr} onwards)
 8. ✅ You have written a comprehensive summary (exactly 2 paragraphs, each at least 200 characters) that thoroughly covers all main points and details from the article you read
 9. ✅ The article image is visible on the page and you can extract its URL
 10. ✅ The article is from one of the 10 verified sources listed above
 
 REMEMBER: You MUST use your web browsing tool to actually open and read each article. Do not rely on summaries, feeds, or article lists. Only include articles that you have successfully opened, read, and verified in your browser. Every URL must be copied directly from your browser's address bar after opening the article page.
 
-Ensure all data is accurate, extracted directly from the REAL article pages you have opened in your browser, and only includes articles from December 9, 2025 00:00:00 UTC onwards. Every URL must be the exact URL from your browser address bar and must work when tested. Articles that fail these validations will be REJECTED.`;
+Ensure all data is accurate, extracted directly from the REAL article pages you have opened in your browser, and only includes articles from the last 7 days (${minDateStr} 00:00:00 UTC onwards). Every URL must be the exact URL from your browser address bar and must work when tested. Articles that fail these validations will be REJECTED.`;
 
       // CRITICAL: Validate model before API call
       const ACTIVE_MODELS_LIST: GroqModel[] = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
@@ -1144,7 +1098,7 @@ Ensure all data is accurate, extracted directly from the REAL article pages you 
               role: 'system',
               content: `You are a professional news aggregator bot for LIXIE with REAL-TIME web browsing capabilities. Your job is to:
 1. ONLY fetch news from the verified sources provided (do not use other sources)
-2. ONLY fetch articles published from December 9, 2025 (${minDateStr}) onwards - check publish date carefully on each article page
+2. ONLY fetch articles published from the last 7 days (${minDateStr} onwards) - check publish date carefully on each article page
 3. ACTUALLY VISIT the source websites using your web browsing capabilities and extract REAL, CURRENT articles (not made up or fictional)
 4. Preserve the EXACT title from the source website (do not translate or modify titles)
 5. Extract REAL image URLs directly from article pages (check og:image meta tag in HTML, main article image, featured image)
@@ -1161,10 +1115,11 @@ CRITICAL REQUIREMENTS:
 - You MUST extract the EXACT publish date from the article page metadata (look for "Published:", "Tanggal:", "Date:", "Diterbitkan:" in HTML)
 - You MUST extract REAL image URLs from the article page HTML (check og:image meta tag, main image, featured image)
 - Only use the verified sources provided
-- Only include articles from December 9, 2025 onwards
+- Only include articles from the last 7 days (${minDateStr} onwards)
 - Extract images and content directly from article pages, not from summaries or feeds
 - Ensure you get articles from all categories for comprehensive coverage
-- Do NOT make up articles, URLs, or dates`,
+- Do NOT make up articles, URLs, or dates
+`,
             },
             {
               role: 'user',
@@ -1227,7 +1182,7 @@ CRITICAL REQUIREMENTS:
               role: 'system',
               content: `You are a professional news aggregator bot for LIXIE. Your job is to:
 1. ONLY fetch news from the verified sources provided (do not use other sources)
-2. ONLY fetch articles published from ${minDateStr} onwards (last 7 days, check publish date carefully)
+2. ONLY fetch articles published from the last 7 days (${minDateStr} onwards, check publish date carefully)
 3. Visit the actual source websites and extract real, current articles
 4. Preserve the EXACT title from the source website (do not translate or modify titles)
 5. Extract REAL image URLs directly from article pages (check og:image, main image, featured image)
@@ -1238,11 +1193,11 @@ CRITICAL REQUIREMENTS:
 10. Extract all metadata (publish date, views, shares) when available
 11. Return valid JSON with accurate, real data from actual articles
 12. Prioritize articles published TODAY first, then recent days
-13. Fetch exactly 1 article per source (10 articles total for 10 sources)
+13. Fetch exactly 1 article per source (${sources.length} articles total for ${sources.length} sources)
 
 IMPORTANT: 
 - Only use the verified sources provided
-- Only include articles from ${minDateStr} onwards (last 7 days)
+- Only include articles from the last 7 days (${minDateStr} onwards)
 - Extract images and content directly from article pages, not from summaries or feeds
 - Ensure you get articles from all categories for comprehensive coverage
 - If there are natural disasters or environmental emergencies in the region, prioritize these articles`,
@@ -1275,16 +1230,17 @@ IMPORTANT:
         fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/api-scheduler.ts:565',message:'Parsed Groq JSON response',data:{region,articlesCount:articles.length,isArray:Array.isArray(parsed)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
         // #endregion
         
-        // Filter articles: only from December 14, 2025 onwards
-        // Filter: only articles from last 7 days (but be lenient - accept articles from today even if date parsing fails)
-        // Filter: only articles from December 9, 2025 onwards
-        const minDate = new Date('2025-12-09T00:00:00.000Z');
-        const minDateTime = minDate.getTime();
-        const today = new Date().getTime();
+        // Filter articles: only from last 7 days (dynamic, always current)
+        // Use same date calculation as above
+        const filterMinDate = new Date();
+        filterMinDate.setDate(filterMinDate.getDate() - 7); // Last 7 days
+        filterMinDate.setHours(0, 0, 0, 0); // Start of day
+        const minDateTime = filterMinDate.getTime();
+        const todayTime = new Date().getTime();
 
         console.log(`📅 Filtering articles: ${articles.length} total`);
-        console.log(`   Min date: December 9, 2025 00:00:00 UTC (${minDate.toISOString()})`);
-        console.log(`   Today: ${new Date(today).toISOString()}`);
+        console.log(`   Min date: Last 7 days (${filterMinDate.toISOString()})`);
+        console.log(`   Today: ${new Date().toISOString()}`);
 
         const recentArticles = articles.filter((article: any) => {
           try {
@@ -1311,7 +1267,7 @@ IMPORTANT:
         // STRICT: Reject all articles if date filter removes everything (don't accept invalid dates)
         if (articles.length > 0 && recentArticles.length === 0) {
           console.error(`❌ All ${articles.length} articles were filtered out by date!`);
-          console.error(`   REJECTED: All articles are from before December 9, 2025 or have invalid dates`);
+          console.error(`   REJECTED: All articles are from before the last 7 days or have invalid dates`);
           console.error(`   This indicates the model may not be following date requirements correctly`);
           return []; // Return empty array - don't accept invalid articles
         }
@@ -1386,7 +1342,6 @@ IMPORTANT:
               'bbc.com', 'reuters.com', 'apnews.com', 'theguardian.com', 'aljazeera.com',
               'kompas.com', 'detik.com', 'cnnindonesia.com',
               'xinhuanet.com', 'chinadaily.com.cn',
-              'yna.co.kr', 'soompi.com', 'allkpop.com',
             ];
             
             // Allow images from source domains or common CDN/image hosting
@@ -1410,7 +1365,6 @@ IMPORTANT:
                 'kompas.com', 'detik.com', 'cnnindonesia.com', 'tempo.co', 'antaranews.com',
                 'thejakartapost.com', 'bisnis.com', 'katadata.co.id', 'tvri.go.id', 'republika.co.id',
                 'xinhuanet.com', 'chinadaily.com.cn', 'ecns.cn', 'people.com.cn',
-                'yna.co.kr', 'soompi.com', 'allkpop.com',
                 'bbc.com', 'reuters.com', 'apnews.com', 'theguardian.com', 'aljazeera.com', 'cnn.com',
               ];
               
@@ -1498,9 +1452,11 @@ IMPORTANT:
             // Don't reject - let it through if URL format is valid
           }
 
-          // STRICT DATE FILTER: only from December 9, 2025 onwards
-          // REJECT articles from 2020, 2021, 2022, 2023, 2024, or before Dec 9, 2025
-          const minDate = new Date('2025-12-09T00:00:00.000Z');
+          // STRICT DATE FILTER: only from last 7 days (dynamic, always current)
+          // REJECT articles older than last 7 days
+          const minDate = new Date();
+          minDate.setDate(minDate.getDate() - 7); // Last 7 days
+          minDate.setHours(0, 0, 0, 0); // Start of day
           let articleDate: Date | null = null;
           let isDateValid = false; // Default to false (strict)
           
@@ -1520,16 +1476,16 @@ IMPORTANT:
               return null; // REJECT invalid dates
             }
             
-            // STRICT: Only accept dates from December 9, 2025 onwards
+            // STRICT: Only accept dates from last 7 days (dynamic)
             isDateValid = articleDate >= minDate;
             
             if (!isDateValid) {
               const year = articleDate.getFullYear();
               console.log(`⚠️ Article filtered out (date too old): ${article.title?.substring(0, 50)}...`);
               console.log(`   Published: ${article.published_at} (${articleDate.toISOString()})`);
-              console.log(`   Year: ${year} (REJECTED: must be from Dec 9, 2025 onwards)`);
-              console.log(`   Min date: ${minDate.toISOString()}`);
-              return null; // REJECT articles older than Dec 9, 2025
+              console.log(`   Year: ${year} (REJECTED: must be from last 7 days)`);
+              console.log(`   Min date: ${minDate.toISOString()} (last 7 days)`);
+              return null; // REJECT articles older than last 7 days
             }
           } catch (dateError) {
             console.log(`⚠️ Article filtered out (date parsing error): ${article.title?.substring(0, 50)}...`);
@@ -1560,6 +1516,7 @@ IMPORTANT:
             source_url: isValidSourceUrl(article.source_url || '') ? article.source_url : undefined,
           };
         }).filter((article: Article | null): article is Article => article !== null);
+        
         // #region agent log
         fetch('http://127.0.0.1:7243/ingest/85038818-23fd-4225-a87b-eee28bbc9fae',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/api-scheduler.ts:740',message:'Articles mapped successfully',data:{region,mappedCount:mappedArticles.length,articleTitles:mappedArticles.slice(0,3).map((a: Article) => a.title?.substring(0,50))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
         // #endregion
@@ -1588,7 +1545,7 @@ IMPORTANT:
    * Get news sources for a region
    * 10 verified sources per region with comprehensive category coverage
    */
-  private getNewsSources(region: NewsRegion): { name: string; url: string; categories: string[] }[] {
+  public getNewsSources(region: NewsRegion): { name: string; url: string; categories: string[] }[] {
     const sources: Record<NewsRegion, { name: string; url: string; categories: string[] }[]> = {
       'id': [
         {
@@ -1692,23 +1649,6 @@ IMPORTANT:
           name: 'China.org.cn',
           url: 'http://www.china.org.cn',
           categories: ['China', 'World', 'Business', 'Culture', 'Tech', 'Environment']
-        }
-      ],
-      'kr': [
-        {
-          name: 'Soompi',
-          url: 'https://www.soompi.com',
-          categories: ['Entertainment', 'K-Pop', 'K-pop News', 'Idol News', 'Music', 'TV Shows', 'Drama', 'Celebrity', 'Culture', 'Lifestyle']
-        },
-        {
-          name: 'Allkpop',
-          url: 'https://www.allkpop.com',
-          categories: ['K-Pop', 'K-pop News', 'Idol News', 'Entertainment', 'Music', 'Celebrity', 'Drama', 'TV Shows', 'Culture', 'Lifestyle']
-        },
-        {
-          name: 'Yonhap News Agency',
-          url: 'https://en.yna.co.kr',
-          categories: ['K-Pop', 'Entertainment', 'Culture', 'Music', 'Celebrity', 'K-pop News', 'Idol News', 'Drama', 'TV Shows']
         }
       ],
       'intl': [

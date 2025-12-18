@@ -56,11 +56,6 @@ export function useHotNewsNotifications() {
                    articleSource.includes('ecns') ||
                    articleSource.includes('ciie')) {
           region = 'cn';
-        } else if (articleLanguage === 'ko' || 
-                   articleSource.includes('yonhap') || 
-                   articleSource.includes('kbs') ||
-                   articleSource.includes('ap news') && article.title.toLowerCase().includes('korea')) {
-          region = 'kr';
         } else {
           // Check for international sources
           if (articleSource.includes('bbc') ||

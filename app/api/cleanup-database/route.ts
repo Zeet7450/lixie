@@ -14,7 +14,7 @@ export async function POST() {
     const pool = await import('@/lib/database').then(m => m.getPool());
     let finalCount = 0;
     if (pool) {
-      const tables = ['indonesia', 'china', 'japan', 'korea', 'international'];
+      const tables = ['indonesia', 'china', 'international'];
       for (const table of tables) {
         try {
           const count = await pool.query(`SELECT COUNT(*) as count FROM ${table}`);

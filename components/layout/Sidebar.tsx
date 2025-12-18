@@ -330,7 +330,6 @@ export function Sidebar({ isOpen, onClose, showDeleteMenu: externalShowDeleteMen
                           { value: 'all', label: language === 'id' ? 'Semua' : 'All' },
                           { value: 'id', label: 'Indonesia' },
                           { value: 'cn', label: 'China' },
-                          { value: 'kr', label: 'K-pop' },
                           { value: 'intl', label: 'International' },
                         ].map((option) => (
                           <button
@@ -441,10 +440,6 @@ export function Sidebar({ isOpen, onClose, showDeleteMenu: externalShowDeleteMen
                       <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{dbAnalytics.articlesByRegion.cn || 0}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-emerald-700 dark:text-cream-300">K-pop:</span>
-                      <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{dbAnalytics.articlesByRegion.kr || 0}</span>
-                    </div>
-                    <div className="flex justify-between">
                       <span className="text-emerald-700 dark:text-cream-300">International:</span>
                       <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{dbAnalytics.articlesByRegion.intl || 0}</span>
                     </div>
@@ -469,7 +464,7 @@ export function Sidebar({ isOpen, onClose, showDeleteMenu: externalShowDeleteMen
                   </p>
                 </div>
                 
-                {sortedCategories.length > 0 ? (
+                {sortedCategories.length > 0 && (
                   <div className="space-y-3">
                     {sortedCategories.map((item, index) => (
                       <div key={item.category} className="space-y-1">
@@ -495,10 +490,6 @@ export function Sidebar({ isOpen, onClose, showDeleteMenu: externalShowDeleteMen
                       </div>
                     ))}
                   </div>
-                ) : (
-                  <p className="text-sm text-emerald-700 dark:text-cream-300 text-center py-4">
-                    Belum ada data membaca
-                  </p>
                 )}
               </div>
 

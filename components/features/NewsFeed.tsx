@@ -16,8 +16,21 @@ interface NewsFeedProps {
 export function NewsFeed({ category }: NewsFeedProps) {
   const { articles, loading } = useArticles(category);
   const { container, item } = useStaggerAnimation('fast');
-  const [articleLimit, setArticleLimit] = useState(12);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [isMobile, setIsMobile] = useState(false);
+  
+  // Detect mobile device for animation optimization
+  useEffect(() => {
+    const checkMobile = () => {
+      const width = window.innerWidth;
+      const isMobileDevice = width < 768 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      setIsMobile(isMobileDevice);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
   
   // Check news status when no articles
   useEffect(() => {
@@ -56,8 +69,10 @@ export function NewsFeed({ category }: NewsFeedProps) {
     }
   }, [loading, articles.length]);
   
-  // Final filter: Only articles from December 9, 2025 onwards
-  const minDate = new Date('2025-12-09T00:00:00.000Z');
+  // Final filter: Only articles from last 7 days (rolling window - always current)
+  const minDate = new Date();
+  minDate.setDate(minDate.getDate() - 7); // Last 7 days
+  minDate.setHours(0, 0, 0, 0); // Start of day
   const minDateTime = minDate.getTime();
   const filteredArticles = articles.filter((article) => {
     try {
@@ -69,20 +84,6 @@ export function NewsFeed({ category }: NewsFeedProps) {
     }
   });
 
-  useEffect(() => {
-    // Limit articles to 4 rows: mobile 1 col (4), tablet 2 cols (8), desktop 3 cols (12)
-    const updateLimit = () => {
-      const width = window.innerWidth;
-      if (width < 640) setArticleLimit(4); // Mobile: 1 column × 4 rows
-      else if (width < 1024) setArticleLimit(8); // Tablet: 2 columns × 4 rows
-      else setArticleLimit(12); // Desktop: 3 columns × 4 rows
-    };
-
-    updateLimit();
-    window.addEventListener('resize', updateLimit);
-    return () => window.removeEventListener('resize', updateLimit);
-  }, []);
-
   if (loading) {
     return <RegionLoading />;
   }
@@ -91,20 +92,22 @@ export function NewsFeed({ category }: NewsFeedProps) {
     return <EmptyState statusMessage={statusMessage} />;
   }
 
-  const limitedArticles = filteredArticles.slice(0, articleLimit);
-
+  // Show ALL articles - no limit
   return (
     <motion.div
-      variants={container as any}
-      initial="hidden"
-      animate="visible"
+      variants={isMobile ? undefined : container as any}
+      initial={isMobile ? undefined : "hidden"}
+      animate={isMobile ? undefined : "visible"}
       className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 px-3 sm:px-4 lg:px-6 py-4 sm:py-6 lg:py-8"
-      onAnimationComplete={() => {}}
       data-news-grid
     >
-      {limitedArticles.map((article, index) => (
-        <motion.div key={article.id} variants={item as any} className="w-full">
-          <ArticleCard article={article} index={index} />
+      {filteredArticles.map((article, index) => (
+        <motion.div 
+          key={article.id} 
+          variants={isMobile ? undefined : item as any}
+          className="w-full"
+        >
+          <ArticleCard article={article} index={isMobile ? 0 : index} isMobile={isMobile} />
         </motion.div>
       ))}
     </motion.div>

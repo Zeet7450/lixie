@@ -24,12 +24,11 @@ export function Header({ onSidebarToggle }: HeaderProps) {
   const regionEmojis: Record<AppRegion, string> = {
     'id': '🦏', // Rhinoceros (represents Indonesia)
     'cn': '🐼', // Panda (represents China)
-    'kr': '🐰', // White Rabbit (represents K-pop)
     'intl': '🌍', // Earth Planet (represents international/global)
   };
 
   const handleRegionChange = () => {
-    const allRegions: AppRegion[] = ['id', 'cn', 'kr', 'intl'];
+    const allRegions: AppRegion[] = ['id', 'cn', 'intl'];
     const currentIndex = allRegions.findIndex(r => r === region);
     const nextIndex = (currentIndex + 1) % allRegions.length;
     setRegion(allRegions[nextIndex]);

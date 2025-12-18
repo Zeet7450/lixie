@@ -155,7 +155,6 @@ export default function DebugPage() {
                       const regionNames: Record<string, string> = {
                         'id': 'Indonesia',
                         'cn': 'China',
-                        'kr': 'Korea',
                         'intl': 'International',
                       };
                       return (
@@ -195,7 +194,6 @@ export default function DebugPage() {
                         const regionNames: Record<string, string> = {
                           'id': 'Indonesia',
                           'cn': 'China',
-                          'kr': 'Korea',
                           'intl': 'International',
                         };
                         return (
